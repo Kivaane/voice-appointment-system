@@ -1,7 +1,9 @@
+from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
-from pydantic import EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+from app.models import AvailabilityStatus
 
 class ServiceCreate(BaseModel):
     name: str = Field(min_length=2, max_length=100)
@@ -79,7 +81,7 @@ class StaffResponse(BaseModel):
     phone_number: str | None
     speciality: str | None
     is_active: bool
-    services: list[ServiceResponse] = []
+    services: list[ServiceResponse] = Field(default_factory=list)
 
     model_config = ConfigDict(
         from_attributes=True,
@@ -88,3 +90,33 @@ class StaffResponse(BaseModel):
 
 class StaffServiceAssignment(BaseModel):
     service_id: int
+
+
+class AvailabilitySlotCreate(BaseModel):
+    """Information required to create an availability slot."""
+
+    staff_id: int = Field(gt=0)
+    service_id: int = Field(gt=0)
+    start_datetime: datetime
+    end_datetime: datetime
+
+
+class AvailabilitySlotUpdate(BaseModel):
+    """Fields that may be changed on an availability slot."""
+
+    start_datetime: datetime | None = None
+    end_datetime: datetime | None = None
+    status: AvailabilityStatus | None = None
+
+
+class AvailabilitySlotResponse(BaseModel):
+    """Availability slot returned by the API."""
+
+    id: int
+    staff_id: int
+    service_id: int
+    start_datetime: datetime
+    end_datetime: datetime
+    status: AvailabilityStatus
+
+    model_config = ConfigDict(from_attributes=True)

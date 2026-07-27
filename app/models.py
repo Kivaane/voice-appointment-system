@@ -1,8 +1,12 @@
+from datetime import datetime
 from decimal import Decimal
+from enum import Enum
 
 from sqlalchemy import (
     Boolean,
     Column,
+    DateTime,
+    Enum as SqlEnum,
     ForeignKey,
     Integer,
     Numeric,
@@ -28,6 +32,13 @@ staff_services = Table(
         primary_key=True,
     ),
 )
+
+
+class AvailabilityStatus(str, Enum):
+    AVAILABLE = "AVAILABLE"
+    HELD = "HELD"
+    BOOKED = "BOOKED"
+    BLOCKED = "BLOCKED"
 
 
 class Service(Base):
@@ -73,6 +84,10 @@ class Service(Base):
         back_populates="services",
     )
 
+    availability_slots: Mapped[list["AvailabilitySlot"]] = relationship(
+        back_populates="service",
+    )
+
 
 class Staff(Base):
     """A staff member who can provide appointment services."""
@@ -115,4 +130,58 @@ class Staff(Base):
     services: Mapped[list[Service]] = relationship(
         secondary=staff_services,
         back_populates="staff_members",
+    )
+
+    availability_slots: Mapped[list["AvailabilitySlot"]] = relationship(
+        back_populates="staff",
+    )
+
+
+class AvailabilitySlot(Base):
+    """A bookable time period for one staff member and service."""
+
+    __tablename__ = "availability_slots"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    staff_id: Mapped[int] = mapped_column(
+        ForeignKey("staff.id"),
+        nullable=False,
+        index=True,
+    )
+
+    service_id: Mapped[int] = mapped_column(
+        ForeignKey("services.id"),
+        nullable=False,
+        index=True,
+    )
+
+    start_datetime: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        index=True,
+    )
+
+    end_datetime: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+    )
+
+    status: Mapped[AvailabilityStatus] = mapped_column(
+        SqlEnum(AvailabilityStatus),
+        default=AvailabilityStatus.AVAILABLE,
+        nullable=False,
+        index=True,
+    )
+
+    staff: Mapped["Staff"] = relationship(
+        back_populates="availability_slots",
+    )
+
+    service: Mapped["Service"] = relationship(
+        back_populates="availability_slots",
     )
