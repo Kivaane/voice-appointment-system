@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 
@@ -184,4 +184,47 @@ class AvailabilitySlot(Base):
 
     service: Mapped["Service"] = relationship(
         back_populates="availability_slots",
+    )
+
+class Customer(Base):
+    """A customer who books appointments."""
+
+    __tablename__ = "customers"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    full_name: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False,
+    )
+
+    phone_number: Mapped[str] = mapped_column(
+        String(30),
+        unique=True,
+        nullable=False,
+    )
+
+    email: Mapped[str | None] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=True,
+    )
+
+    date_of_birth: Mapped[date | None] = mapped_column(
+        nullable=True,
+    )
+
+    gender: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
     )

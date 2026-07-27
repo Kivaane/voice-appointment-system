@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -120,3 +120,60 @@ class AvailabilitySlotResponse(BaseModel):
     status: AvailabilityStatus
 
     model_config = ConfigDict(from_attributes=True)
+
+class CustomerCreate(BaseModel):
+    full_name: str = Field(
+        min_length=2,
+        max_length=150,
+    )
+
+    phone_number: str = Field(
+        min_length=7,
+        max_length=30,
+    )
+
+    email: EmailStr | None = None
+    date_of_birth: date | None = None
+
+    gender: str | None = Field(
+        default=None,
+        max_length=20,
+    )
+
+
+class CustomerUpdate(BaseModel):
+    full_name: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=150,
+    )
+
+    phone_number: str | None = Field(
+        default=None,
+        min_length=7,
+        max_length=30,
+    )
+
+    email: EmailStr | None = None
+    date_of_birth: date | None = None
+
+    gender: str | None = Field(
+        default=None,
+        max_length=20,
+    )
+
+    is_active: bool | None = None
+
+
+class CustomerResponse(BaseModel):
+    id: int
+    full_name: str
+    phone_number: str
+    email: EmailStr | None
+    date_of_birth: date | None
+    gender: str | None
+    is_active: bool
+
+    model_config = ConfigDict(
+        from_attributes=True,
+    )

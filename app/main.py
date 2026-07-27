@@ -9,6 +9,8 @@ from app.database import Base, engine
 from app.routes.services import router as services_router
 from app.routes.staff import router as staff_router
 from app.routes.availability import router as availability_router
+from app.routes.customers import router as customers_router
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -25,7 +27,7 @@ app = FastAPI(
 app.include_router(services_router)
 app.include_router(staff_router)
 app.include_router(availability_router)
-
+app.include_router(customers_router)
 @app.get("/")
 def root() -> dict[str, str]:
     return {
