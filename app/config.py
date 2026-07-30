@@ -15,12 +15,12 @@ class Settings(BaseSettings):
     ai_provider: Literal["gemini", "openai"] = "gemini"
 
     google_api_key: str | None = None
-    gemini_model: str = "gemini-3.6-flash"
+    gemini_model: str = "gemini-3.5-flash-lite"
 
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.4-mini"
 
-   
+
 
     model_config = SettingsConfigDict(
         env_file=".env",
