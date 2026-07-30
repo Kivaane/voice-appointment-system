@@ -178,7 +178,7 @@ class Staff(Base):
     appointments: Mapped[list["Appointment"]] = relationship(
         back_populates="staff",
     )
-    
+
 
 
 class AvailabilitySlot(Base):
