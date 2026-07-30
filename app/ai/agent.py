@@ -10,8 +10,13 @@ from langchain_core.messages import (
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode, tools_condition
 
 from app.ai.model import get_chat_model
+from app.ai.tools import (
+    check_available_slots,
+    list_available_services,
+)
 from app.ai_persistence import (
     get_or_create_conversation,
     record_event,
@@ -22,18 +27,31 @@ from app.database import SessionLocal
 from app.models import AIEventType, AIMessageRole
 
 
+READ_ONLY_TOOLS = [
+    list_available_services,
+    check_available_slots,
+]
+
+
 SYSTEM_PROMPT = """
 You are an appointment assistant.
 
 Your responsibilities are to:
-- answer simple questions about appointment booking
+- answer questions about appointment services
+- use the service tool when the customer asks what services are offered
+- use the availability tool when the customer asks about available slots
 - ask for missing information clearly
 - remember relevant details from earlier messages in the same thread
 - remain concise and professional
 - never invent appointment availability
 - never claim that an appointment is booked unless a booking tool confirms it
 
-At this stage, you do not have access to booking tools.
+The availability tool requires:
+- service_id
+- requested_date in YYYY-MM-DD format
+- optional staff_id
+
+Booking, cancellation, and rescheduling actions are not available yet.
 """.strip()
 
 
@@ -68,9 +86,12 @@ def extract_text_content(content: object) -> str:
 def call_model(
     state: AppointmentAgentState,
 ) -> AppointmentAgentState:
-    """Generate a response using the complete thread history."""
+    """Generate a response and allow read-only tool calls."""
 
     model = get_chat_model()
+
+    if hasattr(model, "bind_tools"):
+        model = model.bind_tools(READ_ONLY_TOOLS)
 
     response = model.invoke(
         [
@@ -85,7 +106,7 @@ def call_model(
 
 
 def build_appointment_agent():
-    """Build the stateful appointment LangGraph."""
+    """Build the stateful appointment agent with tools."""
 
     graph_builder = StateGraph(AppointmentAgentState)
 
@@ -94,20 +115,32 @@ def build_appointment_agent():
         call_model,
     )
 
+    graph_builder.add_node(
+        "tools",
+        ToolNode(READ_ONLY_TOOLS),
+    )
+
     graph_builder.add_edge(
         START,
         "call_model",
     )
 
-    graph_builder.add_edge(
+    graph_builder.add_conditional_edges(
         "call_model",
-        END,
+        tools_condition,
+        {
+            "tools": "tools",
+            END: END,
+        },
     )
 
-    checkpointer = InMemorySaver()
+    graph_builder.add_edge(
+        "tools",
+        "call_model",
+    )
 
     return graph_builder.compile(
-        checkpointer=checkpointer,
+        checkpointer=InMemorySaver(),
     )
 
 

@@ -4,13 +4,20 @@ from langchain_core.messages import (
 )
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
+from types import SimpleNamespace
 
+from app.ai import tools as ai_tools
 from app.ai import agent
 from app.database import Base
 from app.models import (
     AIConversation,
     AIEvent,
     AIMessage as DatabaseAIMessage,
+)
+from langchain_core.messages import (
+    AIMessage as LangChainAIMessage,
+    HumanMessage,
+    ToolMessage,
 )
 
 
@@ -303,3 +310,119 @@ def test_same_thread_preserves_conversation_history(
             "What is my name?",
             "Your name is Kivi.",
         ]
+
+
+def test_agent_executes_service_tool(
+    monkeypatch,
+) -> None:
+    class FakeDatabase:
+        def close(self) -> None:
+            pass
+
+    class ToolCallingFakeModel:
+        def bind_tools(
+            self,
+            bound_tools,
+        ):
+            assert len(bound_tools) == 2
+            return self
+
+        def invoke(
+            self,
+            messages: list[object],
+        ) -> LangChainAIMessage:
+            tool_messages = [
+                message
+                for message in messages
+                if isinstance(message, ToolMessage)
+            ]
+
+            if not tool_messages:
+                return LangChainAIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "list_available_services",
+                            "args": {},
+                            "id": "service-tool-call-001",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+
+            assert "Dental care" in tool_messages[-1].content
+
+            return LangChainAIMessage(
+                content="Dental care is available."
+            )
+
+    monkeypatch.setattr(
+        agent,
+        "get_chat_model",
+        lambda: ToolCallingFakeModel(),
+    )
+
+    monkeypatch.setattr(
+        ai_tools,
+        "SessionLocal",
+        lambda: FakeDatabase(),
+    )
+
+    monkeypatch.setattr(
+        ai_tools,
+        "list_services",
+        lambda database, include_inactive: [
+            SimpleNamespace(
+                id=1,
+                name="Dental care",
+                description="Dental appointment",
+                duration_minutes=30,
+                price=None,
+            )
+        ],
+    )
+
+    monkeypatch.setattr(
+        ai_tools,
+        "get_settings",
+        lambda: SimpleNamespace(
+            currency="LKR",
+        ),
+    )
+
+    result = agent.appointment_agent.invoke(
+        {
+            "messages": [
+                HumanMessage(
+                    content="What services are available?"
+                )
+            ]
+        },
+        config={
+            "configurable": {
+                "thread_id": "tool-integration-test-001",
+            }
+        },
+    )
+
+    final_message = result["messages"][-1]
+
+    assert isinstance(
+        final_message,
+        LangChainAIMessage,
+    )
+
+    assert final_message.content == (
+        "Dental care is available."
+    )
+
+    tool_messages = [
+        message
+        for message in result["messages"]
+        if isinstance(message, ToolMessage)
+    ]
+
+    assert len(tool_messages) == 1
+    assert tool_messages[0].name == (
+        "list_available_services"
+    )
