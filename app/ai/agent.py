@@ -1,9 +1,18 @@
 from typing import TypedDict
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from app.ai.model import get_chat_model
+from app.ai_persistence import (
+    get_or_create_conversation,
+    record_event,
+    save_message,
+)
+from app.config import get_settings
+from app.database import SessionLocal
+from app.models import AIEventType, AIMessageRole
 
 
 SYSTEM_PROMPT = """
@@ -25,6 +34,8 @@ class AppointmentAgentState(TypedDict):
 
     user_message: str
     assistant_response: str
+
+
 def extract_text_content(content: object) -> str:
     """Convert model response content into plain text."""
 
@@ -45,6 +56,7 @@ def extract_text_content(content: object) -> str:
             return "\n".join(text_parts)
 
     return str(content)
+
 
 def call_model(
     state: AppointmentAgentState,
@@ -94,14 +106,72 @@ appointment_agent = build_appointment_agent()
 
 def run_appointment_agent(
     user_message: str,
+    thread_id: str | None = None,
+    request_id: str | None = None,
 ) -> str:
-    """Run one message through the appointment graph."""
+    """Run one message through the graph and persist the interaction."""
 
-    result = appointment_agent.invoke(
-        {
-            "user_message": user_message,
-            "assistant_response": "",
-        }
-    )
+    resolved_thread_id = thread_id or str(uuid4())
+    database = SessionLocal()
 
-    return result["assistant_response"]
+    try:
+        conversation = get_or_create_conversation(
+            database=database,
+            thread_id=resolved_thread_id,
+        )
+
+        save_message(
+            database=database,
+            conversation_id=conversation.id,
+            role=AIMessageRole.USER,
+            content=user_message,
+        )
+
+        record_event(
+            database=database,
+            conversation_id=conversation.id,
+            event_type=AIEventType.MODEL_REQUEST,
+            event_name="appointment_agent_model_request",
+            event_data={
+                "message_length": len(user_message),
+            },
+            request_id=request_id,
+        )
+
+        result = appointment_agent.invoke(
+            {
+                "user_message": user_message,
+                "assistant_response": "",
+            }
+        )
+
+        assistant_response = result["assistant_response"]
+        settings = get_settings()
+
+        save_message(
+            database=database,
+            conversation_id=conversation.id,
+            role=AIMessageRole.ASSISTANT,
+            content=assistant_response,
+            model_name=(
+                settings.gemini_model
+                if settings.ai_provider == "gemini"
+                else settings.openai_model
+            ),
+        )
+
+        record_event(
+            database=database,
+            conversation_id=conversation.id,
+            event_type=AIEventType.MODEL_RESPONSE,
+            event_name="appointment_agent_model_response",
+            event_data={
+                "response_length": len(assistant_response),
+            },
+            request_id=request_id,
+        )
+
+        return assistant_response
+
+    finally:
+        database.close()
