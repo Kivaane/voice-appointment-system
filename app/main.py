@@ -1,7 +1,7 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-
+from app.middleware import RequestLoggingMiddleware
 from fastapi import FastAPI
 
 from app.logging_config import configure_logging
@@ -37,7 +37,7 @@ app.include_router(staff_router)
 app.include_router(availability_router)
 app.include_router(customers_router)
 app.include_router(appointments_router)
-
+app.add_middleware(RequestLoggingMiddleware)
 
 @app.get("/")
 def root() -> dict[str, str]:
@@ -49,8 +49,6 @@ def root() -> dict[str, str]:
 
 @app.get("/health")
 def health_check() -> dict[str, str]:
-    logger.info("Health check requested")
-
     return {
         "status": "healthy",
     }
