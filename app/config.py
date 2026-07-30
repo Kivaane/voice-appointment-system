@@ -12,6 +12,15 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./appointments.db"
     currency: str = "LKR"
 
+    log_level: Literal[
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+    ] = "INFO"
+    log_file: str = "logs/app.log"
+
     ai_provider: Literal["gemini", "openai"] = "gemini"
 
     google_api_key: str | None = None
@@ -19,8 +28,6 @@ class Settings(BaseSettings):
 
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.4-mini"
-
-
 
     model_config = SettingsConfigDict(
         env_file=".env",

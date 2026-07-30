@@ -1,5 +1,10 @@
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
+from app.logging_config import configure_logging
 from app.routes.appointments import router as appointments_router
 from app.routes.availability import router as availability_router
 from app.routes.customers import router as customers_router
@@ -7,10 +12,24 @@ from app.routes.services import router as services_router
 from app.routes.staff import router as staff_router
 
 
+configure_logging()
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Log application startup and shutdown events."""
+
+    logger.info("Application starting")
+    yield
+    logger.info("Application shutting down")
+
+
 app = FastAPI(
     title="AI Voice Appointment System",
     description="Backend API for appointment management.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.include_router(services_router)
@@ -30,6 +49,8 @@ def root() -> dict[str, str]:
 
 @app.get("/health")
 def health_check() -> dict[str, str]:
+    logger.info("Health check requested")
+
     return {
         "status": "healthy",
     }
