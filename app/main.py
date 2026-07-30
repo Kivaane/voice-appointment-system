@@ -10,7 +10,7 @@ from app.routes.availability import router as availability_router
 from app.routes.customers import router as customers_router
 from app.routes.services import router as services_router
 from app.routes.staff import router as staff_router
-
+from app.routes.ai_chat import router as ai_chat_router
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -38,6 +38,8 @@ app.include_router(availability_router)
 app.include_router(customers_router)
 app.include_router(appointments_router)
 app.add_middleware(RequestLoggingMiddleware)
+app.include_router(ai_chat_router)
+
 
 @app.get("/")
 def root() -> dict[str, str]:

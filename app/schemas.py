@@ -219,3 +219,23 @@ class AppointmentResponse(BaseModel):
     model_config = ConfigDict(
         from_attributes=True,
     )
+class AIChatRequest(BaseModel):
+    """One message sent to the appointment agent."""
+
+    message: str = Field(
+        min_length=1,
+        max_length=4000,
+    )
+
+    thread_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+    )
+
+
+class AIChatResponse(BaseModel):
+    """Response returned by the appointment agent."""
+
+    thread_id: str
+    response: str
