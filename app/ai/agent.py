@@ -370,7 +370,16 @@ def determine_next_question(
 def call_model(
     state: AppointmentAgentState,
 ) -> AppointmentAgentState:
-    """Generate a response and allow read-only tool calls."""
+    """Return a controlled question or generate a model response."""
+
+    next_question = state.get("next_question")
+
+    if next_question is not None:
+        return {
+            "messages": [
+                LangChainAIMessage(content=next_question),
+            ],
+        }
 
     model = get_chat_model()
 

@@ -1,23 +1,20 @@
+from types import SimpleNamespace
+
 from langchain_core.messages import (
     AIMessage as LangChainAIMessage,
     HumanMessage,
+    ToolMessage,
 )
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
-from types import SimpleNamespace
 
-from app.ai import tools as ai_tools
 from app.ai import agent
+from app.ai import tools as ai_tools
 from app.database import Base
 from app.models import (
     AIConversation,
     AIEvent,
     AIMessage as DatabaseAIMessage,
-)
-from langchain_core.messages import (
-    AIMessage as LangChainAIMessage,
-    HumanMessage,
-    ToolMessage,
 )
 
 
@@ -31,9 +28,7 @@ class FakeChatModel:
         assert len(messages) >= 2
 
         return LangChainAIMessage(
-            content=(
-                "What type of appointment would you like to book?"
-            )
+            content="Which service would you like to book?"
         )
 
 
@@ -51,7 +46,7 @@ def test_simple_appointment_agent(
     )
 
     assert response == (
-        "What type of appointment would you like to book?"
+        "Which service would you like to book?"
     )
 
 
@@ -126,7 +121,7 @@ def test_agent_persists_messages_and_events(
     )
 
     assert response == (
-        "What type of appointment would you like to book?"
+        "Which service would you like to book?"
     )
 
     with Session(engine) as database:
@@ -172,7 +167,7 @@ def test_agent_persists_messages_and_events(
         )
 
         assert messages[1].content == (
-            "What type of appointment would you like to book?"
+            "Which service would you like to book?"
         )
 
         assert len(events) == 2
@@ -193,6 +188,7 @@ def test_agent_persists_messages_and_events(
             "request-test-agent-001"
         )
 
+
 def test_same_thread_preserves_conversation_history(
     monkeypatch,
 ) -> None:
@@ -211,7 +207,9 @@ def test_same_thread_preserves_conversation_history(
 
             if latest_message == "My name is Kivi.":
                 return LangChainAIMessage(
-                    content="I will remember that your name is Kivi."
+                    content=(
+                        "I will remember that your name is Kivi."
+                    )
                 )
 
             if latest_message == "What is my name?":
@@ -286,7 +284,9 @@ def test_same_thread_preserves_conversation_history(
                     DatabaseAIMessage.conversation_id
                     == conversation.id
                 )
-                .order_by(DatabaseAIMessage.id)
+                .order_by(
+                    DatabaseAIMessage.id
+                )
             )
         )
 
@@ -297,14 +297,19 @@ def test_same_thread_preserves_conversation_history(
                     AIEvent.conversation_id
                     == conversation.id
                 )
-                .order_by(AIEvent.id)
+                .order_by(
+                    AIEvent.id
+                )
             )
         )
 
         assert len(messages) == 4
         assert len(events) == 4
 
-        assert [message.content for message in messages] == [
+        assert [
+            message.content
+            for message in messages
+        ] == [
             "My name is Kivi.",
             "I will remember that your name is Kivi.",
             "What is my name?",
@@ -342,7 +347,9 @@ def test_agent_executes_service_tool(
                     content="",
                     tool_calls=[
                         {
-                            "name": "list_available_services",
+                            "name": (
+                                "list_available_services"
+                            ),
                             "args": {},
                             "id": "service-tool-call-001",
                             "type": "tool_call",
@@ -350,7 +357,10 @@ def test_agent_executes_service_tool(
                     ],
                 )
 
-            assert "Dental care" in tool_messages[-1].content
+            assert (
+                "Dental care"
+                in tool_messages[-1].content
+            )
 
             return LangChainAIMessage(
                 content="Dental care is available."
@@ -400,7 +410,9 @@ def test_agent_executes_service_tool(
         },
         config={
             "configurable": {
-                "thread_id": "tool-integration-test-001",
+                "thread_id": (
+                    "tool-integration-test-001"
+                ),
             }
         },
     )
@@ -423,6 +435,7 @@ def test_agent_executes_service_tool(
     ]
 
     assert len(tool_messages) == 1
+
     assert tool_messages[0].name == (
         "list_available_services"
     )
