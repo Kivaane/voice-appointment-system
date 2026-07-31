@@ -1,4 +1,4 @@
-from typing import Annotated, TypedDict
+from typing import Annotated, Literal, TypedDict
 from uuid import uuid4
 
 from langchain_core.messages import (
@@ -55,11 +55,40 @@ Booking, cancellation, and rescheduling actions are not available yet.
 """.strip()
 
 
-class AppointmentAgentState(TypedDict):
-    """Conversation state stored by LangGraph."""
+AppointmentIntent = Literal[
+    "book_appointment",
+    "cancel_appointment",
+    "reschedule_appointment",
+    "check_availability",
+    "list_services",
+    "general_question",
+]
+
+ConfirmationStatus = Literal[
+    "not_requested",
+    "pending",
+    "confirmed",
+    "rejected",
+]
+
+class AppointmentAgentState(TypedDict, total=False):
+    """Structured conversation state stored by LangGraph."""
 
     messages: Annotated[list[AnyMessage], add_messages]
 
+    intent: AppointmentIntent | None
+
+    customer_id: int | None
+    service_id: int | None
+    staff_id: int | None
+    requested_date: str | None
+    slot_id: int | None
+
+    appointment_id: int | None
+    cancellation_reason: str | None
+
+    missing_fields: list[str]
+    confirmation_status: ConfirmationStatus
 
 def extract_text_content(content: object) -> str:
     """Convert model response content into plain text."""
@@ -81,6 +110,143 @@ def extract_text_content(content: object) -> str:
             return "\n".join(text_parts)
 
     return str(content)
+
+def get_latest_user_message(
+    state: AppointmentAgentState,
+) -> str:
+    """Return the latest human message from the conversation."""
+
+    for message in reversed(state.get("messages", [])):
+        if isinstance(message, HumanMessage):
+            return extract_text_content(message.content)
+
+    return ""
+
+
+def detect_intent(
+    state: AppointmentAgentState,
+) -> AppointmentAgentState:
+    """Identify the user's current appointment intent."""
+
+    user_message = get_latest_user_message(state).lower()
+
+    if any(
+        keyword in user_message
+        for keyword in (
+            "reschedule",
+            "move my appointment",
+            "change my appointment",
+            "change the appointment",
+        )
+    ):
+        intent: AppointmentIntent = "reschedule_appointment"
+
+    elif any(
+        keyword in user_message
+        for keyword in (
+            "cancel",
+            "remove my appointment",
+        )
+    ):
+        intent = "cancel_appointment"
+
+    elif any(
+        keyword in user_message
+        for keyword in (
+            "available slot",
+            "available time",
+            "availability",
+            "free slot",
+            "what time",
+            "which time",
+        )
+    ):
+        intent = "check_availability"
+
+    elif any(
+        keyword in user_message
+        for keyword in (
+            "what services",
+            "which services",
+            "services available",
+            "services offered",
+            "what do you offer",
+        )
+    ):
+        intent = "list_services"
+
+    elif any(
+        keyword in user_message
+        for keyword in (
+            "book",
+            "make an appointment",
+            "need an appointment",
+            "schedule an appointment",
+        )
+    ):
+        intent = "book_appointment"
+
+    else:
+        existing_intent = state.get("intent")
+
+        if existing_intent in {
+        "book_appointment",
+        "cancel_appointment",
+        "reschedule_appointment",
+        "check_availability",
+    }:
+                intent = existing_intent
+        else:
+                intent = "general_question"
+
+    return {
+        "intent": intent,
+    }
+
+def calculate_missing_fields(
+    state: AppointmentAgentState,
+) -> AppointmentAgentState:
+    """Calculate the information still required for the current intent."""
+
+    intent = state.get("intent")
+    missing_fields: list[str] = []
+
+    if intent == "book_appointment":
+        required_fields = (
+            "customer_id",
+            "service_id",
+            "staff_id",
+            "slot_id",
+        )
+
+    elif intent == "check_availability":
+        required_fields = (
+            "service_id",
+            "requested_date",
+        )
+
+    elif intent == "cancel_appointment":
+        required_fields = (
+            "appointment_id",
+            "cancellation_reason",
+        )
+
+    elif intent == "reschedule_appointment":
+        required_fields = (
+            "appointment_id",
+            "slot_id",
+        )
+
+    else:
+        required_fields = ()
+
+    for field_name in required_fields:
+        if state.get(field_name) is None:
+            missing_fields.append(field_name)
+
+    return {
+        "missing_fields": missing_fields,
+    }
 
 
 def call_model(
@@ -111,6 +277,12 @@ def build_appointment_agent():
     graph_builder = StateGraph(AppointmentAgentState)
 
     graph_builder.add_node(
+    "detect_intent",
+    detect_intent,
+)
+
+
+    graph_builder.add_node(
         "call_model",
         call_model,
     )
@@ -121,9 +293,23 @@ def build_appointment_agent():
     )
 
     graph_builder.add_edge(
-        START,
-        "call_model",
-    )
+    START,
+    "detect_intent",
+)
+    graph_builder.add_node(
+    "calculate_missing_fields",
+    calculate_missing_fields,
+)
+
+    graph_builder.add_edge(
+    "detect_intent",
+    "calculate_missing_fields",
+)
+
+    graph_builder.add_edge(
+    "calculate_missing_fields",
+    "call_model",
+)
 
     graph_builder.add_conditional_edges(
         "call_model",
