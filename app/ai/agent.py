@@ -85,8 +85,8 @@ class AppointmentAgentState(TypedDict, total=False):
     service_id: int | None
     staff_id: int | None
     requested_date: str | None
+    available_slots: list[dict[str, object]] | None
     slot_id: int | None
-
 
     appointment_id: int | None
     cancellation_reason: str | None
@@ -271,6 +271,44 @@ def extract_details(
     return extracted
 
 
+def lookup_conversation_availability(
+    state: AppointmentAgentState,
+) -> AppointmentAgentState:
+    """Check real availability once service and date are available."""
+
+    intent = state.get("intent")
+
+    if intent not in {
+        "book_appointment",
+        "check_availability",
+    }:
+        return {}
+
+    service_id = state.get("service_id")
+    requested_date = state.get("requested_date")
+
+    if service_id is None or requested_date is None:
+        return {}
+
+    tool_arguments: dict[str, object] = {
+        "service_id": service_id,
+        "requested_date": requested_date,
+    }
+
+    staff_id = state.get("staff_id")
+
+    if staff_id is not None:
+        tool_arguments["staff_id"] = staff_id
+
+    slots = check_available_slots.run(
+        tool_arguments,
+    )
+
+    return {
+        "available_slots": slots,
+    }
+
+
 def calculate_missing_fields(
     state: AppointmentAgentState,
 ) -> AppointmentAgentState:
@@ -316,10 +354,11 @@ def calculate_missing_fields(
         "missing_fields": missing_fields,
     }
 
+
 def determine_next_question(
     state: AppointmentAgentState,
 ) -> AppointmentAgentState:
-    """Choose the next question for the current appointment flow."""
+    """Choose the next controlled response for the appointment flow."""
 
     intent = state.get("intent")
     next_question: str | None = None
@@ -327,12 +366,36 @@ def determine_next_question(
     if intent == "book_appointment":
         if state.get("service_id") is None:
             next_question = "Which service would you like to book?"
+
         elif state.get("requested_date") is None:
             next_question = "Which date would you prefer?"
+
         elif state.get("slot_id") is None:
-            next_question = (
-                "Which available appointment slot would you prefer?"
-            )
+            available_slots = state.get("available_slots")
+
+            if not available_slots:
+                next_question = (
+                    "There are no available appointment slots "
+                    "for that service and date. "
+                    "Which other date would you prefer?"
+                )
+            else:
+                slot_lines = [
+                    (
+                        f"{slot['slot_id']}: "
+                        f"{slot['start_datetime']} "
+                        f"to {slot['end_datetime']} "
+                        f"with staff {slot['staff_id']}"
+                    )
+                    for slot in available_slots
+                ]
+
+                next_question = (
+                    "These appointment slots are available:\n"
+                    + "\n".join(slot_lines)
+                    + "\nWhich slot would you prefer?"
+                )
+
         elif state.get("customer_id") is None:
             next_question = "What is your customer ID?"
 
@@ -341,14 +404,40 @@ def determine_next_question(
             next_question = (
                 "Which service would you like to check?"
             )
+
         elif state.get("requested_date") is None:
             next_question = (
                 "Which date would you like to check?"
             )
 
+        else:
+            available_slots = state.get("available_slots")
+
+            if not available_slots:
+                next_question = (
+                    "There are no available appointment slots "
+                    "for that service and date."
+                )
+            else:
+                slot_lines = [
+                    (
+                        f"{slot['slot_id']}: "
+                        f"{slot['start_datetime']} "
+                        f"to {slot['end_datetime']} "
+                        f"with staff {slot['staff_id']}"
+                    )
+                    for slot in available_slots
+                ]
+
+                next_question = (
+                    "These appointment slots are available:\n"
+                    + "\n".join(slot_lines)
+                )
+
     elif intent == "cancel_appointment":
         if state.get("appointment_id") is None:
             next_question = "What is your appointment ID?"
+
         elif state.get("cancellation_reason") is None:
             next_question = (
                 "What is the reason for the cancellation?"
@@ -357,6 +446,7 @@ def determine_next_question(
     elif intent == "reschedule_appointment":
         if state.get("appointment_id") is None:
             next_question = "What is your appointment ID?"
+
         elif state.get("slot_id") is None:
             next_question = (
                 "Which new appointment slot would you prefer?"
@@ -419,6 +509,16 @@ def build_appointment_agent():
     )
 
     graph_builder.add_node(
+        "lookup_conversation_availability",
+        lookup_conversation_availability,
+    )
+
+    graph_builder.add_node(
+        "determine_next_question",
+        determine_next_question,
+    )
+
+    graph_builder.add_node(
         "call_model",
         call_model,
     )
@@ -427,14 +527,6 @@ def build_appointment_agent():
         "tools",
         ToolNode(READ_ONLY_TOOLS),
     )
-
-    graph_builder.add_node(
-    "determine_next_question",
-    determine_next_question,
-)
-
-
-
 
     graph_builder.add_edge(
         START,
@@ -453,13 +545,18 @@ def build_appointment_agent():
 
     graph_builder.add_edge(
         "calculate_missing_fields",
+        "lookup_conversation_availability",
+    )
+
+    graph_builder.add_edge(
+        "lookup_conversation_availability",
         "determine_next_question",
-)
+    )
 
     graph_builder.add_edge(
         "determine_next_question",
         "call_model",
-)
+    )
 
     graph_builder.add_conditional_edges(
         "call_model",

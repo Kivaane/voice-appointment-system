@@ -24,8 +24,37 @@ from app.ai.agent import determine_next_question
                 "intent": "book_appointment",
                 "service_id": 2,
                 "requested_date": "2026-08-05",
+                "available_slots": [],
             },
-            "Which available appointment slot would you prefer?",
+            (
+                "There are no available appointment slots "
+                "for that service and date. "
+                "Which other date would you prefer?"
+            ),
+        ),
+        (
+            {
+                "intent": "book_appointment",
+                "service_id": 2,
+                "requested_date": "2026-08-05",
+                "available_slots": [
+                    {
+                        "slot_id": 7,
+                        "service_id": 2,
+                        "staff_id": 5,
+                        "start_datetime": "2026-08-05T10:00:00",
+                        "end_datetime": "2026-08-05T10:30:00",
+                        "status": "available",
+                    }
+                ],
+            },
+            (
+                "These appointment slots are available:\n"
+                "7: 2026-08-05T10:00:00 "
+                "to 2026-08-05T10:30:00 "
+                "with staff 5\n"
+                "Which slot would you prefer?"
+            ),
         ),
         (
             {
