@@ -87,10 +87,12 @@ class AppointmentAgentState(TypedDict, total=False):
     requested_date: str | None
     slot_id: int | None
 
+
     appointment_id: int | None
     cancellation_reason: str | None
 
     missing_fields: list[str]
+    next_question: str | None
     confirmation_status: ConfirmationStatus
 
 
@@ -314,6 +316,56 @@ def calculate_missing_fields(
         "missing_fields": missing_fields,
     }
 
+def determine_next_question(
+    state: AppointmentAgentState,
+) -> AppointmentAgentState:
+    """Choose the next question for the current appointment flow."""
+
+    intent = state.get("intent")
+    next_question: str | None = None
+
+    if intent == "book_appointment":
+        if state.get("service_id") is None:
+            next_question = "Which service would you like to book?"
+        elif state.get("requested_date") is None:
+            next_question = "Which date would you prefer?"
+        elif state.get("slot_id") is None:
+            next_question = (
+                "Which available appointment slot would you prefer?"
+            )
+        elif state.get("customer_id") is None:
+            next_question = "What is your customer ID?"
+
+    elif intent == "check_availability":
+        if state.get("service_id") is None:
+            next_question = (
+                "Which service would you like to check?"
+            )
+        elif state.get("requested_date") is None:
+            next_question = (
+                "Which date would you like to check?"
+            )
+
+    elif intent == "cancel_appointment":
+        if state.get("appointment_id") is None:
+            next_question = "What is your appointment ID?"
+        elif state.get("cancellation_reason") is None:
+            next_question = (
+                "What is the reason for the cancellation?"
+            )
+
+    elif intent == "reschedule_appointment":
+        if state.get("appointment_id") is None:
+            next_question = "What is your appointment ID?"
+        elif state.get("slot_id") is None:
+            next_question = (
+                "Which new appointment slot would you prefer?"
+            )
+
+    return {
+        "next_question": next_question,
+    }
+
 
 def call_model(
     state: AppointmentAgentState,
@@ -367,6 +419,14 @@ def build_appointment_agent():
         ToolNode(READ_ONLY_TOOLS),
     )
 
+    graph_builder.add_node(
+    "determine_next_question",
+    determine_next_question,
+)
+
+
+
+
     graph_builder.add_edge(
         START,
         "detect_intent",
@@ -384,8 +444,13 @@ def build_appointment_agent():
 
     graph_builder.add_edge(
         "calculate_missing_fields",
+        "determine_next_question",
+)
+
+    graph_builder.add_edge(
+        "determine_next_question",
         "call_model",
-    )
+)
 
     graph_builder.add_conditional_edges(
         "call_model",
