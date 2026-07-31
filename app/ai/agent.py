@@ -1,3 +1,4 @@
+import re
 from typing import Annotated, Literal, TypedDict
 from uuid import uuid4
 
@@ -64,12 +65,14 @@ AppointmentIntent = Literal[
     "general_question",
 ]
 
+
 ConfirmationStatus = Literal[
     "not_requested",
     "pending",
     "confirmed",
     "rejected",
 ]
+
 
 class AppointmentAgentState(TypedDict, total=False):
     """Structured conversation state stored by LangGraph."""
@@ -89,6 +92,7 @@ class AppointmentAgentState(TypedDict, total=False):
 
     missing_fields: list[str]
     confirmation_status: ConfirmationStatus
+
 
 def extract_text_content(content: object) -> str:
     """Convert model response content into plain text."""
@@ -110,6 +114,7 @@ def extract_text_content(content: object) -> str:
             return "\n".join(text_parts)
 
     return str(content)
+
 
 def get_latest_user_message(
     state: AppointmentAgentState,
@@ -154,6 +159,7 @@ def detect_intent(
         keyword in user_message
         for keyword in (
             "available slot",
+            "available slots",
             "available time",
             "availability",
             "free slot",
@@ -190,18 +196,78 @@ def detect_intent(
         existing_intent = state.get("intent")
 
         if existing_intent in {
-        "book_appointment",
-        "cancel_appointment",
-        "reschedule_appointment",
-        "check_availability",
-    }:
-                intent = existing_intent
+            "book_appointment",
+            "cancel_appointment",
+            "reschedule_appointment",
+            "check_availability",
+        }:
+            intent = existing_intent
         else:
-                intent = "general_question"
+            intent = "general_question"
 
     return {
         "intent": intent,
     }
+
+
+def extract_details(
+    state: AppointmentAgentState,
+) -> AppointmentAgentState:
+    """Extract clearly stated appointment details from the latest message."""
+
+    user_message = get_latest_user_message(state)
+    extracted: AppointmentAgentState = {}
+
+    id_patterns = {
+        "customer_id": (
+            r"\bcustomer(?:\s+id)?\s*(?:is|=|:)?\s*(\d+)\b"
+        ),
+        "service_id": (
+            r"\bservice(?:\s+id)?\s*(?:is|=|:)?\s*(\d+)\b"
+        ),
+        "staff_id": (
+            r"\bstaff(?:\s+id)?\s*(?:is|=|:)?\s*(\d+)\b"
+        ),
+        "slot_id": (
+            r"\bslot(?:\s+id)?\s*(?:is|=|:)?\s*(\d+)\b"
+        ),
+        "appointment_id": (
+            r"\bappointment(?:\s+id)?\s*(?:is|=|:)?\s*(\d+)\b"
+        ),
+    }
+
+    for field_name, pattern in id_patterns.items():
+        match = re.search(
+            pattern,
+            user_message,
+            flags=re.IGNORECASE,
+        )
+
+        if match is not None:
+            extracted[field_name] = int(match.group(1))
+
+    date_match = re.search(
+        r"\b\d{4}-\d{2}-\d{2}\b",
+        user_message,
+    )
+
+    if date_match is not None:
+        extracted["requested_date"] = date_match.group(0)
+
+    if state.get("intent") == "cancel_appointment":
+        reason_match = re.search(
+            r"\b(?:because|reason(?:\s+is)?[:]?)\s+(.+)$",
+            user_message,
+            flags=re.IGNORECASE,
+        )
+
+        if reason_match is not None:
+            extracted["cancellation_reason"] = (
+                reason_match.group(1).strip().rstrip(".")
+            )
+
+    return extracted
+
 
 def calculate_missing_fields(
     state: AppointmentAgentState,
@@ -277,10 +343,19 @@ def build_appointment_agent():
     graph_builder = StateGraph(AppointmentAgentState)
 
     graph_builder.add_node(
-    "detect_intent",
-    detect_intent,
-)
+        "detect_intent",
+        detect_intent,
+    )
 
+    graph_builder.add_node(
+        "extract_details",
+        extract_details,
+    )
+
+    graph_builder.add_node(
+        "calculate_missing_fields",
+        calculate_missing_fields,
+    )
 
     graph_builder.add_node(
         "call_model",
@@ -293,23 +368,24 @@ def build_appointment_agent():
     )
 
     graph_builder.add_edge(
-    START,
-    "detect_intent",
-)
-    graph_builder.add_node(
-    "calculate_missing_fields",
-    calculate_missing_fields,
-)
+        START,
+        "detect_intent",
+    )
 
     graph_builder.add_edge(
-    "detect_intent",
-    "calculate_missing_fields",
-)
+        "detect_intent",
+        "extract_details",
+    )
 
     graph_builder.add_edge(
-    "calculate_missing_fields",
-    "call_model",
-)
+        "extract_details",
+        "calculate_missing_fields",
+    )
+
+    graph_builder.add_edge(
+        "calculate_missing_fields",
+        "call_model",
+    )
 
     graph_builder.add_conditional_edges(
         "call_model",
