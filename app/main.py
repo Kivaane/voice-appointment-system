@@ -3,6 +3,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from app.middleware import RequestLoggingMiddleware
 from fastapi import FastAPI
+from pathlib import Path
+
+from fastapi.responses import FileResponse
 
 from app.logging_config import configure_logging
 from app.routes.appointments import router as appointments_router
@@ -14,7 +17,7 @@ from app.routes.ai_chat import router as ai_chat_router
 
 configure_logging()
 logger = logging.getLogger(__name__)
-
+STATIC_DIRECTORY = Path(__file__).resolve().parent / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -40,6 +43,18 @@ app.include_router(appointments_router)
 app.add_middleware(RequestLoggingMiddleware)
 app.include_router(ai_chat_router)
 
+
+@app.get(
+    "/chat",
+    response_class=FileResponse,
+    include_in_schema=False,
+)
+def chat_page() -> FileResponse:
+    """Serve the browser appointment chatbot."""
+
+    return FileResponse(
+        STATIC_DIRECTORY / "chat.html"
+    )
 
 @app.get("/")
 def root() -> dict[str, str]:

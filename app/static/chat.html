@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>AI Appointment Assistant</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: Arial, sans-serif;
+            background: #f3f5f9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .chat-container {
+            width: min(720px, 94vw);
+            height: min(820px, 92vh);
+            background: white;
+            border-radius: 18px;
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.12);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            padding: 20px 24px;
+            background: #202938;
+            color: white;
+        }
+
+        .chat-header h1 {
+            margin: 0;
+            font-size: 22px;
+        }
+
+        .chat-header p {
+            margin: 7px 0 0;
+            font-size: 14px;
+            opacity: 0.8;
+        }
+
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 22px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .message-row {
+            display: flex;
+        }
+
+        .message-row.user {
+            justify-content: flex-end;
+        }
+
+        .message-row.assistant {
+            justify-content: flex-start;
+        }
+
+        .message {
+            max-width: 78%;
+            padding: 12px 16px;
+            border-radius: 16px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        .message-row.user .message {
+            background: #202938;
+            color: white;
+            border-bottom-right-radius: 5px;
+        }
+
+        .message-row.assistant .message {
+            background: #e9edf4;
+            color: #1f2937;
+            border-bottom-left-radius: 5px;
+        }
+
+        .message.error {
+            background: #ffe1e1;
+            color: #8b1e1e;
+        }
+
+        .typing {
+            font-style: italic;
+            opacity: 0.7;
+        }
+
+        .chat-form {
+            border-top: 1px solid #e4e7ec;
+            padding: 16px;
+            display: flex;
+            gap: 10px;
+            background: white;
+        }
+
+        .chat-input {
+            flex: 1;
+            padding: 13px 15px;
+            border: 1px solid #cbd2dc;
+            border-radius: 12px;
+            font-size: 16px;
+            outline: none;
+        }
+
+        .chat-input:focus {
+            border-color: #202938;
+        }
+
+        .send-button {
+            border: none;
+            border-radius: 12px;
+            padding: 0 22px;
+            background: #202938;
+            color: white;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .send-button:disabled,
+        .chat-input:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+
+<body>
+    <main class="chat-container">
+        <header class="chat-header">
+            <h1>AI Appointment Assistant</h1>
+            <p>Ask about services, availability, or appointments.</p>
+        </header>
+
+        <section
+            id="messages"
+            class="messages"
+            aria-live="polite"
+        ></section>
+
+        <form id="chat-form" class="chat-form">
+            <input
+                id="message-input"
+                class="chat-input"
+                type="text"
+                placeholder="Type your message..."
+                autocomplete="off"
+                required
+            >
+
+            <button
+                id="send-button"
+                class="send-button"
+                type="submit"
+            >
+                Send
+            </button>
+        </form>
+    </main>
+
+    <script>
+        const messagesElement =
+            document.getElementById("messages");
+
+        const formElement =
+            document.getElementById("chat-form");
+
+        const inputElement =
+            document.getElementById("message-input");
+
+        const sendButton =
+            document.getElementById("send-button");
+
+        const threadId = getOrCreateThreadId();
+
+        function getOrCreateThreadId() {
+            const storedThreadId =
+                localStorage.getItem(
+                    "appointment_chat_thread_id"
+                );
+
+            if (storedThreadId) {
+                return storedThreadId;
+            }
+
+            const newThreadId =
+                crypto.randomUUID();
+
+            localStorage.setItem(
+                "appointment_chat_thread_id",
+                newThreadId
+            );
+
+            return newThreadId;
+        }
+
+        function addMessage(
+            content,
+            sender,
+            extraClass = ""
+        ) {
+            const row =
+                document.createElement("div");
+
+            const message =
+                document.createElement("div");
+
+            row.className =
+                `message-row ${sender}`;
+
+            message.className =
+                `message ${extraClass}`.trim();
+
+            message.textContent = content;
+
+            row.appendChild(message);
+            messagesElement.appendChild(row);
+
+            messagesElement.scrollTop =
+                messagesElement.scrollHeight;
+
+            return row;
+        }
+
+        function setLoading(isLoading) {
+            inputElement.disabled = isLoading;
+            sendButton.disabled = isLoading;
+        }
+
+        async function sendMessage(userMessage) {
+            addMessage(
+                userMessage,
+                "user"
+            );
+
+            const typingRow = addMessage(
+                "Thinking...",
+                "assistant",
+                "typing"
+            );
+
+            setLoading(true);
+
+            try {
+                const response = await fetch(
+                    "/ai/chat",
+                    {
+                        method: "POST",
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
+                        body: JSON.stringify({
+                            message: userMessage,
+                            thread_id: threadId
+                        })
+                    }
+                );
+
+                const responseBody =
+                    await response.json();
+
+                typingRow.remove();
+
+                if (!response.ok) {
+                    throw new Error(
+                        responseBody.detail
+                        ?? "The request failed."
+                    );
+                }
+
+                addMessage(
+                    responseBody.response,
+                    "assistant"
+                );
+            } catch (error) {
+                typingRow.remove();
+
+                addMessage(
+                    error instanceof Error
+                        ? error.message
+                        : "Something went wrong.",
+                    "assistant",
+                    "error"
+                );
+            } finally {
+                setLoading(false);
+                inputElement.focus();
+            }
+        }
+
+        formElement.addEventListener(
+            "submit",
+            async (event) => {
+                event.preventDefault();
+
+                const userMessage =
+                    inputElement.value.trim();
+
+                if (!userMessage) {
+                    return;
+                }
+
+                inputElement.value = "";
+
+                await sendMessage(userMessage);
+            }
+        );
+
+        addMessage(
+            "Hello! How can I help you with your appointment?",
+            "assistant"
+        );
+
+        inputElement.focus();
+    </script>
+</body>
+</html>
