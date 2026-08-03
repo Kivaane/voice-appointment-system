@@ -2903,6 +2903,42 @@ def detect_intent(
 
     user_message = get_latest_user_message(state).lower()
 
+    is_new_booking_request = any(
+        keyword in user_message
+        for keyword in (
+            "book",
+            "appointment",
+            "make an appointment",
+            "need an appointment",
+            "need a",
+            "schedule an appointment",
+            "see a doctor",
+            "see the doctor",
+        )
+    )
+
+    if (
+        state.get("appointment_id") is not None
+        and is_new_booking_request
+    ):
+        return {
+            "intent": "book_appointment",
+            "service_id": None,
+            "service_name": None,
+            "staff_id": None,
+            "staff_name": None,
+            "requested_date": None,
+            "available_slots": None,
+            "selected_slot_summary": None,
+            "booking_summary": None,
+            "slot_id": None,
+            "appointment_id": None,
+            "appointment_reference_number": None,
+            "missing_fields": [],
+            "next_question": None,
+            "confirmation_status": "not_requested",
+        }
+
     if (
         state.get("confirmation_status") == "pending"
         and state.get("appointment_id") is None

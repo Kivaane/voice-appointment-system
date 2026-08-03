@@ -1095,3 +1095,235 @@ def test_booking_conversation_treats_1st_as_slot_choice_not_date() -> None:
         assert result.get("selected_slot_summary") == (
             "Dental care at 10:00 AM with Dr. Perera"
         )
+
+
+def test_booking_conversation_starts_new_booking_after_confirmed_appointment() -> None:
+    thread_id = "booking-conversation-new-booking-after-confirmed-test-001"
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+    services = [
+        {
+            "id": 2,
+            "name": "Dental care",
+            "description": "Dental checkups and treatment appointments.",
+            "duration_minutes": 30,
+            "price": 3500.00,
+        },
+        {
+            "id": 7,
+            "name": "Physiotherapy",
+            "description": "Physiotherapy treatment appointment.",
+            "duration_minutes": 45,
+            "price": 4500.00,
+        },
+    ]
+
+    dental_staff = [
+        {
+            "id": 5,
+            "full_name": "Dr. Perera",
+            "speciality": "Dental care",
+        }
+    ]
+
+    physiotherapy_staff = [
+        {
+            "id": 6,
+            "full_name": "Therapist Nimal",
+            "speciality": "Physiotherapy",
+        }
+    ]
+
+    physiotherapy_slots = [
+        {
+            "slot_id": 20,
+            "service_id": 7,
+            "service_name": "Physiotherapy",
+            "staff_id": 6,
+            "staff_name": "Therapist Nimal",
+            "start_datetime": "2026-08-06T10:30:00",
+            "end_datetime": "2026-08-06T11:15:00",
+            "status": "AVAILABLE",
+        }
+    ]
+
+    mocked_tool = MagicMock()
+
+    def check_slots(arguments: dict[str, object]) -> list[dict[str, object]]:
+        if arguments["service_id"] == 7:
+            return physiotherapy_slots
+
+        return DEMO_SLOTS
+
+    def get_staff(service_id: int) -> list[dict[str, object]]:
+        if service_id == 7:
+            return physiotherapy_staff
+
+        return dental_staff
+
+    mocked_tool.run.side_effect = check_slots
+
+    with (
+        patch(
+            "app.ai.agent.get_active_services",
+            return_value=services,
+        ),
+        patch(
+            "app.ai.agent.get_active_staff_for_service",
+            side_effect=get_staff,
+        ),
+        patch(
+            "app.ai.agent.check_available_slots",
+            mocked_tool,
+        ),
+        patch(
+            "app.ai.agent.get_or_create_customer_from_details",
+            return_value={
+                "id": 11,
+                "full_name": "Kivaane Anton",
+                "phone_number": "0774588691",
+            },
+        ),
+        patch(
+            "app.ai.agent.create_confirmed_appointment_from_state",
+            side_effect=[
+                {
+                    "id": 101,
+                    "reference_number": "APT-DENTAL-001",
+                    "start_datetime": "2026-08-05T10:00:00",
+                    "end_datetime": "2026-08-05T10:30:00",
+                },
+                {
+                    "id": 102,
+                    "reference_number": "APT-PHYSIO-001",
+                    "start_datetime": "2026-08-06T10:30:00",
+                    "end_datetime": "2026-08-06T11:15:00",
+                },
+            ],
+        ),
+    ):
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="I need a dental appointment.")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="2026-08-05")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="first one")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content=(
+                            "Kivaane Anton and contact number "
+                            "0774588691"
+                        )
+                    )
+                ]
+            },
+            config=config,
+        )
+
+        first_booking_result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="yes confirm")
+                ]
+            },
+            config=config,
+        )
+
+        assert first_booking_result.get("appointment_id") == 101
+        assert first_booking_result.get("appointment_reference_number") == (
+            "APT-DENTAL-001"
+        )
+
+        new_booking_result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="I want to book Physiotherapy")
+                ]
+            },
+            config=config,
+        )
+
+        new_booking_text = extract_text_content(
+            new_booking_result["messages"][-1].content
+        )
+
+        assert "Which date would you prefer?" in new_booking_text
+        assert new_booking_result.get("appointment_id") is None
+        assert new_booking_result.get("appointment_reference_number") is None
+        assert new_booking_result.get("service_id") == 7
+        assert new_booking_result.get("service_name") == "Physiotherapy"
+        assert new_booking_result.get("slot_id") is None
+        assert new_booking_result.get("confirmation_status") == (
+            "not_requested"
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="2026-08-06")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="first one")
+                ]
+            },
+            config=config,
+        )
+
+        second_booking_result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="yes confirm")
+                ]
+            },
+            config=config,
+        )
+
+        second_booking_text = extract_text_content(
+            second_booking_result["messages"][-1].content
+        )
+
+        assert "Your appointment is confirmed." in second_booking_text
+        assert "APT-PHYSIO-001" in second_booking_text
+        assert "Physiotherapy" in second_booking_text
+        assert "Therapist Nimal" in second_booking_text
+
+        assert second_booking_result.get("appointment_id") == 102
+        assert second_booking_result.get("appointment_reference_number") == (
+            "APT-PHYSIO-001"
+        )
+        assert second_booking_result.get("service_id") == 7
+        assert second_booking_result.get("slot_id") == 20
