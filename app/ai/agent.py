@@ -26,7 +26,7 @@ from app.ai_persistence import (
 )
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import AIEventType, AIMessageRole, Service, Staff
+from app.models import AIEventType, AIMessageRole, Customer, Service, Staff
 
 
 READ_ONLY_TOOLS = [
@@ -80,6 +80,8 @@ class AppointmentAgentState(TypedDict, total=False):
     intent: AppointmentIntent | None
 
     customer_id: int | None
+    customer_name: str | None
+    customer_phone_number: str | None
     service_id: int | None
     service_name: str | None
     staff_id: int | None
@@ -89,6 +91,7 @@ class AppointmentAgentState(TypedDict, total=False):
     available_services: list[dict[str, object]] | None
     available_slots: list[dict[str, object]] | None
     selected_slot_summary: str | None
+    booking_summary: str | None
     slot_id: int | None
 
     appointment_id: int | None
@@ -560,6 +563,186 @@ def find_slot_from_message(
 
     return None
 
+def extract_phone_number(
+    user_message: str,
+) -> str | None:
+    """Extract a likely phone number from a customer message."""
+
+    phone_match = re.search(
+        r"\b(?:\+?\d[\d\s-]{6,}\d)\b",
+        user_message,
+    )
+
+    if phone_match is None:
+        return None
+
+    phone_number = re.sub(
+        r"[\s-]+",
+        "",
+        phone_match.group(0),
+    )
+
+    return phone_number
+
+
+def extract_customer_name(
+    user_message: str,
+    phone_number: str | None,
+) -> str | None:
+    """Extract a simple customer name from a message."""
+
+    cleaned_message = user_message.strip()
+
+    if phone_number is not None:
+        cleaned_message = cleaned_message.replace(
+            phone_number,
+            "",
+        )
+
+        spaced_phone = " ".join(phone_number)
+        cleaned_message = cleaned_message.replace(
+            spaced_phone,
+            "",
+        )
+
+    cleaned_message = re.sub(
+        r"\b(?:my\s+name\s+is|name\s+is|i\s+am|"
+        r"this\s+is|contact\s+number|phone\s+number|"
+        r"mobile\s+number|number\s+is|contact)\b",
+        "",
+        cleaned_message,
+        flags=re.IGNORECASE,
+    )
+
+    cleaned_message = re.sub(
+        r"\b(?:and|is|my|phone|number)\b",
+        " ",
+        cleaned_message,
+        flags=re.IGNORECASE,
+    )
+
+    cleaned_message = re.sub(
+        r"[^A-Za-z .'-]+",
+        " ",
+        cleaned_message,
+    )
+
+    cleaned_message = re.sub(
+        r"\s+",
+        " ",
+        cleaned_message,
+    ).strip(" .,-")
+
+    if len(cleaned_message) < 2:
+        return None
+
+    return cleaned_message.title()
+
+
+def get_or_create_customer_from_details(
+    full_name: str,
+    phone_number: str,
+) -> dict[str, object]:
+    """Find an existing customer by phone or create a new one."""
+
+    database = SessionLocal()
+
+    try:
+        customer = (
+            database.query(Customer)
+            .filter(Customer.phone_number == phone_number)
+            .first()
+        )
+
+        if customer is not None:
+            customer.full_name = full_name
+            customer.is_active = True
+            database.commit()
+            database.refresh(customer)
+
+            return {
+                "id": customer.id,
+                "full_name": customer.full_name,
+                "phone_number": customer.phone_number,
+            }
+
+        customer = Customer(
+            full_name=full_name,
+            phone_number=phone_number,
+            is_active=True,
+        )
+
+        database.add(customer)
+        database.commit()
+        database.refresh(customer)
+
+        return {
+            "id": customer.id,
+            "full_name": customer.full_name,
+            "phone_number": customer.phone_number,
+        }
+
+    finally:
+        database.close()
+
+
+def find_selected_slot(
+    state: AppointmentAgentState,
+) -> dict[str, object] | None:
+    """Find the selected slot from the saved available slots."""
+
+    slot_id = state.get("slot_id")
+
+    if slot_id is None:
+        return None
+
+    available_slots = state.get("available_slots") or []
+
+    for slot in available_slots:
+        if slot.get("slot_id") == slot_id:
+            return slot
+
+    return None
+
+
+def format_booking_confirmation_summary(
+    state: AppointmentAgentState,
+) -> str:
+    """Format the pending appointment before final confirmation."""
+
+    selected_slot = find_selected_slot(state)
+
+    service_name = state.get("service_name") or "Appointment"
+    staff_name = state.get("staff_name") or "Selected staff"
+    customer_name = state.get("customer_name") or "Customer"
+    phone_number = state.get("customer_phone_number") or "Not provided"
+
+    if selected_slot is not None:
+        start_time = format_time(
+            selected_slot.get("start_datetime"),
+        )
+        end_time = format_time(
+            selected_slot.get("end_datetime"),
+        )
+    else:
+        start_time = "Selected time"
+        end_time = "Selected end time"
+
+    friendly_date = format_date(
+        state.get("requested_date"),
+    )
+
+    return (
+        "Please confirm your appointment:\n\n"
+        f"Service: {service_name}\n"
+        f"Doctor/Staff: {staff_name}\n"
+        f"Date: {friendly_date}\n"
+        f"Time: {start_time} – {end_time}\n"
+        f"Name: {customer_name}\n"
+        f"Phone: {phone_number}\n\n"
+        "Should I confirm this booking?"
+    )
+
 
 def detect_intent(
     state: AppointmentAgentState,
@@ -712,6 +895,20 @@ def extract_details(
 
         extracted["requested_date"] = parsed_date
 
+    if state.get("intent") == "book_appointment":
+        phone_number = extract_phone_number(user_message)
+
+        if phone_number is not None:
+            extracted["customer_phone_number"] = phone_number
+
+            customer_name = extract_customer_name(
+                user_message=user_message,
+                phone_number=phone_number,
+            )
+
+            if customer_name is not None:
+                extracted["customer_name"] = customer_name
+
     if state.get("intent") == "cancel_appointment":
         reason_match = re.search(
             r"\b(?:because|reason(?:\s+is)?[:]?)\s+(.+)$",
@@ -814,6 +1011,37 @@ def resolve_named_entities(
         updates["staff_name"] = str(only_staff["full_name"])
 
     return updates
+
+def resolve_customer_details(
+    state: AppointmentAgentState,
+) -> AppointmentAgentState:
+    """Resolve customer details into a customer ID."""
+
+    if state.get("intent") != "book_appointment":
+        return {}
+
+    if state.get("slot_id") is None:
+        return {}
+
+    if state.get("customer_id") is not None:
+        return {}
+
+    customer_name = state.get("customer_name")
+    phone_number = state.get("customer_phone_number")
+
+    if customer_name is None or phone_number is None:
+        return {}
+
+    customer = get_or_create_customer_from_details(
+        full_name=customer_name,
+        phone_number=phone_number,
+    )
+
+    return {
+        "customer_id": int(customer["id"]),
+        "customer_name": str(customer["full_name"]),
+        "customer_phone_number": str(customer["phone_number"]),
+    }
 
 
 def lookup_conversation_availability(
@@ -1004,6 +1232,19 @@ def determine_next_question(
                 "for the booking?"
             )
 
+        elif state.get("confirmation_status") != "pending":
+            booking_summary = format_booking_confirmation_summary(
+                state,
+            )
+
+            next_question = booking_summary
+
+            return {
+                "next_question": next_question,
+                "booking_summary": booking_summary,
+                "confirmation_status": "pending",
+            }
+
     elif intent == "check_availability":
         if state.get("service_id") is None:
             next_question = (
@@ -1121,6 +1362,11 @@ def build_appointment_agent():
     )
 
     graph_builder.add_node(
+        "resolve_customer_details",
+        resolve_customer_details,
+    )
+
+    graph_builder.add_node(
         "calculate_missing_fields",
         calculate_missing_fields,
     )
@@ -1162,6 +1408,11 @@ def build_appointment_agent():
 
     graph_builder.add_edge(
         "resolve_named_entities",
+        "resolve_customer_details",
+    )
+
+    graph_builder.add_edge(
+        "resolve_customer_details",
         "calculate_missing_fields",
     )
 

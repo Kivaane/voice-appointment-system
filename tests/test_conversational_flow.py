@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.ai.agent import appointment_agent
+from app.ai.agent import appointment_agent, extract_text_content
 
 
 DEMO_SERVICES = [
@@ -174,4 +174,115 @@ def test_booking_conversation_preserves_state() -> None:
             "requested_date": "2026-08-05",
             "staff_id": 5,
         }
+    )
+
+
+def test_booking_conversation_collects_customer_and_shows_summary() -> None:
+    thread_id = "booking-conversation-customer-summary-test-001"
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+    mocked_tool = MagicMock()
+    mocked_tool.run.return_value = DEMO_SLOTS
+
+    with (
+        patch(
+            "app.ai.agent.get_active_services",
+            return_value=DEMO_SERVICES,
+        ),
+        patch(
+            "app.ai.agent.get_active_staff_for_service",
+            return_value=DEMO_STAFF,
+        ),
+        patch(
+            "app.ai.agent.check_available_slots",
+            mocked_tool,
+        ),
+        patch(
+            "app.ai.agent.get_or_create_customer_from_details",
+            return_value={
+                "id": 11,
+                "full_name": "Kivaane Anton",
+                "phone_number": "0774588691",
+            },
+        ) as mocked_customer_lookup,
+    ):
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content="I need an appointment."
+                    )
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="Dental care.")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="2026-08-05")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="first one")
+                ]
+            },
+            config=config,
+        )
+
+        result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content=(
+                            "Kivaane Anton and contact number "
+                            "0774588691"
+                        )
+                    )
+                ]
+            },
+            config=config,
+        )
+
+        final_response = result["messages"][-1]
+        final_text = extract_text_content(final_response.content)
+
+        assert isinstance(final_response, AIMessage)
+
+        assert "Please confirm your appointment:" in final_text
+        assert "Service: Dental care" in final_text
+        assert "Doctor/Staff: Dr. Perera" in final_text
+        assert "Date: Wednesday, 05 August 2026" in final_text
+        assert "Time: 10:00 AM – 10:30 AM" in final_text
+        assert "Name: Kivaane Anton" in final_text
+        assert "Phone: 0774588691" in final_text
+        assert "Should I confirm this booking?" in final_text
+
+        assert result.get("customer_id") == 11
+        assert result.get("customer_name") == "Kivaane Anton"
+        assert result.get("customer_phone_number") == "0774588691"
+        assert result.get("confirmation_status") == "pending"
+
+    mocked_customer_lookup.assert_called_once_with(
+        full_name="Kivaane Anton",
+        phone_number="0774588691",
     )
