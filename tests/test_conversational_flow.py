@@ -658,3 +658,251 @@ def test_booking_conversation_allows_time_change_after_rejection() -> None:
         assert result.get("customer_id") == 11
 
     mocked_create_appointment.assert_not_called()
+
+def test_booking_conversation_allows_date_change_after_rejection() -> None:
+    thread_id = "booking-conversation-change-date-after-reject-test-001"
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+    mocked_tool = MagicMock()
+    mocked_tool.run.return_value = DEMO_SLOTS
+
+    with (
+        patch(
+            "app.ai.agent.get_active_services",
+            return_value=DEMO_SERVICES,
+        ),
+        patch(
+            "app.ai.agent.get_active_staff_for_service",
+            return_value=DEMO_STAFF,
+        ),
+        patch(
+            "app.ai.agent.check_available_slots",
+            mocked_tool,
+        ),
+        patch(
+            "app.ai.agent.get_or_create_customer_from_details",
+            return_value={
+                "id": 11,
+                "full_name": "Kivaane Anton",
+                "phone_number": "0774588691",
+            },
+        ),
+    ):
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="I need an appointment.")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="Dental care.")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="2026-08-05")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="first one")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content=(
+                            "Kivaane Anton and contact number "
+                            "0774588691"
+                        )
+                    )
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="no")
+                ]
+            },
+            config=config,
+        )
+
+        date_change_result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="different date")
+                ]
+            },
+            config=config,
+        )
+
+        date_change_text = extract_text_content(
+            date_change_result["messages"][-1].content
+        )
+
+        assert "Which date would you prefer?" in date_change_text
+        assert date_change_result.get("requested_date") is None
+        assert date_change_result.get("slot_id") is None
+        assert date_change_result.get("confirmation_status") == (
+            "not_requested"
+        )
+
+        new_date_result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="05th please")
+                ]
+            },
+            config=config,
+        )
+
+        new_date_text = extract_text_content(
+            new_date_result["messages"][-1].content
+        )
+
+        assert "I found these Dental care slots" in new_date_text
+        assert "Wednesday, 05 August 2026" in new_date_text
+        assert "Which one would you prefer?" in new_date_text
+        assert new_date_result.get("requested_date") == "2026-08-05"
+
+
+def test_booking_conversation_allows_service_change_after_rejection() -> None:
+    thread_id = "booking-conversation-change-service-after-reject-test-001"
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+    mocked_tool = MagicMock()
+    mocked_tool.run.return_value = DEMO_SLOTS
+
+    with (
+        patch(
+            "app.ai.agent.get_active_services",
+            return_value=DEMO_SERVICES,
+        ),
+        patch(
+            "app.ai.agent.get_active_staff_for_service",
+            return_value=DEMO_STAFF,
+        ),
+        patch(
+            "app.ai.agent.check_available_slots",
+            mocked_tool,
+        ),
+        patch(
+            "app.ai.agent.get_or_create_customer_from_details",
+            return_value={
+                "id": 11,
+                "full_name": "Kivaane Anton",
+                "phone_number": "0774588691",
+            },
+        ),
+    ):
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="I need an appointment.")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="Dental care.")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="2026-08-05")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="first one")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content=(
+                            "Kivaane Anton and contact number "
+                            "0774588691"
+                        )
+                    )
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="no")
+                ]
+            },
+            config=config,
+        )
+
+        result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="different service")
+                ]
+            },
+            config=config,
+        )
+
+        final_text = extract_text_content(
+            result["messages"][-1].content
+        )
+
+        assert "Which service would you like?" in final_text
+        assert "Available services:" in final_text
+        assert "Dental care" in final_text
+
+        assert result.get("service_id") is None
+        assert result.get("service_name") is None
+        assert result.get("requested_date") is None
+        assert result.get("slot_id") is None
+        assert result.get("confirmation_status") == "not_requested"
