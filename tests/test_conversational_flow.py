@@ -35,7 +35,17 @@ DEMO_SLOTS = [
         "start_datetime": "2026-08-05T10:00:00",
         "end_datetime": "2026-08-05T10:30:00",
         "status": "AVAILABLE",
-    }
+    },
+    {
+        "slot_id": 8,
+        "service_id": 2,
+        "service_name": "Dental care",
+        "staff_id": 5,
+        "staff_name": "Dr. Perera",
+        "start_datetime": "2026-08-05T14:30:00",
+        "end_datetime": "2026-08-05T15:00:00",
+        "status": "AVAILABLE",
+    },
 ]
 
 
@@ -906,3 +916,115 @@ def test_booking_conversation_allows_service_change_after_rejection() -> None:
         assert result.get("requested_date") is None
         assert result.get("slot_id") is None
         assert result.get("confirmation_status") == "not_requested"
+
+
+def test_booking_conversation_allows_second_slot_before_confirmation() -> None:
+    thread_id = "booking-conversation-second-slot-test-001"
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+    mocked_tool = MagicMock()
+    mocked_tool.run.return_value = DEMO_SLOTS
+
+    with (
+        patch(
+            "app.ai.agent.get_active_services",
+            return_value=DEMO_SERVICES,
+        ),
+        patch(
+            "app.ai.agent.get_active_staff_for_service",
+            return_value=DEMO_STAFF,
+        ),
+        patch(
+            "app.ai.agent.check_available_slots",
+            mocked_tool,
+        ),
+        patch(
+            "app.ai.agent.get_or_create_customer_from_details",
+            return_value={
+                "id": 11,
+                "full_name": "Kivaane Anton",
+                "phone_number": "0774588691",
+            },
+        ),
+    ):
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="I need an appointment.")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="Dental care.")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="2026-08-05")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="first one")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content=(
+                            "Kivaane Anton and contact number "
+                            "0774588691"
+                        )
+                    )
+                ]
+            },
+            config=config,
+        )
+
+        result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="use the second slot instead")
+                ]
+            },
+            config=config,
+        )
+
+        final_text = extract_text_content(
+            result["messages"][-1].content
+        )
+
+        assert "Please confirm your appointment:" in final_text
+        assert "Service: Dental care" in final_text
+        assert "Doctor/Staff: Dr. Perera" in final_text
+        assert "Date: Wednesday, 05 August 2026" in final_text
+        assert "Time: 2:30 PM – 3:00 PM" in final_text
+        assert "Name: Kivaane Anton" in final_text
+        assert "Phone: 0774588691" in final_text
+
+        assert result.get("slot_id") == 8
+        assert result.get("selected_slot_summary") == (
+            "Dental care at 2:30 PM with Dr. Perera"
+        )
+        assert result.get("confirmation_status") == "pending"
