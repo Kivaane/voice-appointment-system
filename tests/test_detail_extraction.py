@@ -85,3 +85,62 @@ def test_returns_empty_update_when_no_details_exist() -> None:
     )
 
     assert result == {}
+
+
+def test_parse_requested_date_understands_ordinal_day() -> None:
+    result = extract_details(
+        {
+            "messages": [
+                HumanMessage(content="05th please"),
+            ],
+            "intent": "book_appointment",
+        }
+    )
+
+    assert result == {
+        "requested_date": "2026-08-05",
+    }
+
+
+def test_parse_requested_date_does_not_treat_ids_as_dates() -> None:
+    customer_result = extract_details(
+        {
+            "messages": [
+                HumanMessage(content="My customer ID is 3."),
+            ],
+            "intent": "book_appointment",
+        }
+    )
+
+    service_result = extract_details(
+        {
+            "messages": [
+                HumanMessage(content="I need service 2."),
+            ],
+            "intent": "book_appointment",
+        }
+    )
+
+    appointment_result = extract_details(
+        {
+            "messages": [
+                HumanMessage(
+                    content="Cancel appointment 12 because I am travelling."
+                ),
+            ],
+            "intent": "cancel_appointment",
+        }
+    )
+
+    assert customer_result == {
+        "customer_id": 3,
+    }
+
+    assert service_result == {
+        "service_id": 2,
+    }
+
+    assert appointment_result == {
+        "appointment_id": 12,
+        "cancellation_reason": "I am travelling",
+    }
