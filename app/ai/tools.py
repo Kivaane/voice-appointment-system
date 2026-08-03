@@ -2,17 +2,18 @@ from datetime import date
 
 from langchain.tools import tool
 
-from app.availability_services import list_availability_slots
-from app.config import get_settings
-from app.database import SessionLocal
-from app.models import AvailabilityStatus
-from app.services import list_services
 from app.appointment_services import (
     cancel_appointment,
     create_appointment,
     reschedule_appointment,
 )
+from app.availability_services import list_availability_slots
+from app.config import get_settings
+from app.database import SessionLocal
+from app.models import AvailabilityStatus
 from app.schemas import AppointmentCreate
+from app.services import list_services
+
 
 @tool
 def list_available_services() -> list[dict[str, object]]:
@@ -85,7 +86,17 @@ def check_available_slots(
             {
                 "slot_id": slot.id,
                 "service_id": slot.service_id,
+                "service_name": (
+                    slot.service.name
+                    if slot.service is not None
+                    else None
+                ),
                 "staff_id": slot.staff_id,
+                "staff_name": (
+                    slot.staff.full_name
+                    if slot.staff is not None
+                    else None
+                ),
                 "start_datetime": slot.start_datetime.isoformat(),
                 "end_datetime": slot.end_datetime.isoformat(),
                 "status": slot.status.value,
@@ -93,9 +104,9 @@ def check_available_slots(
             for slot in slots
         ]
 
-
     finally:
         database.close()
+
 
 @tool
 def book_appointment(
@@ -132,12 +143,8 @@ def book_appointment(
             "service_id": appointment.service_id,
             "staff_id": appointment.staff_id,
             "slot_id": appointment.slot_id,
-            "start_datetime": (
-                appointment.start_datetime.isoformat()
-            ),
-            "end_datetime": (
-                appointment.end_datetime.isoformat()
-            ),
+            "start_datetime": appointment.start_datetime.isoformat(),
+            "end_datetime": appointment.end_datetime.isoformat(),
             "status": appointment.status.value,
         }
 
@@ -170,9 +177,7 @@ def cancel_existing_appointment(
             "reference_number": appointment.reference_number,
             "slot_id": appointment.slot_id,
             "status": appointment.status.value,
-            "cancellation_reason": (
-                appointment.cancellation_reason
-            ),
+            "cancellation_reason": appointment.cancellation_reason,
         }
 
     finally:
@@ -205,12 +210,8 @@ def reschedule_existing_appointment(
             "service_id": appointment.service_id,
             "staff_id": appointment.staff_id,
             "slot_id": appointment.slot_id,
-            "start_datetime": (
-                appointment.start_datetime.isoformat()
-            ),
-            "end_datetime": (
-                appointment.end_datetime.isoformat()
-            ),
+            "start_datetime": appointment.start_datetime.isoformat(),
+            "end_datetime": appointment.end_datetime.isoformat(),
             "status": appointment.status.value,
         }
 

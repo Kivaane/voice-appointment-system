@@ -11,21 +11,32 @@ from app.ai.agent import calculate_missing_fields
                 "intent": "book_appointment",
             },
             [
-                "customer_id",
                 "service_id",
-                "staff_id",
+                "requested_date",
                 "slot_id",
+                "customer_id",
             ],
         ),
         (
             {
                 "intent": "book_appointment",
-                "customer_id": 1,
                 "service_id": 2,
             },
             [
-                "staff_id",
+                "requested_date",
                 "slot_id",
+                "customer_id",
+            ],
+        ),
+        (
+            {
+                "intent": "book_appointment",
+                "service_id": 2,
+                "requested_date": "2026-08-05",
+                "slot_id": 7,
+            },
+            [
+                "customer_id",
             ],
         ),
         (

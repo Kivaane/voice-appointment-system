@@ -18,6 +18,17 @@ from app.models import (
 )
 
 
+DEMO_SERVICES = [
+    {
+        "id": 1,
+        "name": "Dental care",
+        "description": "Dental appointment",
+        "duration_minutes": 30,
+        "price": None,
+    }
+]
+
+
 class FakeChatModel:
     """Fake model used without making a real API request."""
 
@@ -28,7 +39,7 @@ class FakeChatModel:
         assert len(messages) >= 2
 
         return LangChainAIMessage(
-            content="Which service would you like to book?"
+            content="Model fallback response."
         )
 
 
@@ -41,13 +52,20 @@ def test_simple_appointment_agent(
         lambda: FakeChatModel(),
     )
 
-    response = agent.run_appointment_agent(
-        "I need an appointment."
+    monkeypatch.setattr(
+        agent,
+        "get_active_services",
+        lambda: DEMO_SERVICES,
     )
 
-    assert response == (
-        "Which service would you like to book?"
+    response = agent.run_appointment_agent(
+        user_message="I need an appointment.",
+        thread_id="simple-agent-natural-booking-test-001",
     )
+
+    assert "Sure, I can help you book an appointment." in response
+    assert "Which service would you like?" in response
+    assert "Dental care" in response
 
 
 def test_extracts_text_from_structured_model_content(
@@ -76,7 +94,8 @@ def test_extracts_text_from_structured_model_content(
     )
 
     response = agent.run_appointment_agent(
-        "I want an appointment."
+        user_message="Tell me something friendly.",
+        thread_id="structured-model-content-test-001",
     )
 
     assert response == (
@@ -114,15 +133,20 @@ def test_agent_persists_messages_and_events(
         lambda: FakeChatModel(),
     )
 
+    monkeypatch.setattr(
+        agent,
+        "get_active_services",
+        lambda: [],
+    )
+
     response = agent.run_appointment_agent(
         user_message="I need an appointment.",
         thread_id="thread-test-agent-001",
         request_id="request-test-agent-001",
     )
 
-    assert response == (
-        "Which service would you like to book?"
-    )
+    assert "Sure, I can help you book an appointment." in response
+    assert "Which service would you like?" in response
 
     with Session(engine) as database:
         conversation = database.scalar(
@@ -166,9 +190,7 @@ def test_agent_persists_messages_and_events(
             "I need an appointment."
         )
 
-        assert messages[1].content == (
-            "Which service would you like to book?"
-        )
+        assert messages[1].content == response
 
         assert len(events) == 2
 
@@ -404,7 +426,7 @@ def test_agent_executes_service_tool(
         {
             "messages": [
                 HumanMessage(
-                    content="What services are available?"
+                    content="Can you tell me about the clinic menu?"
                 )
             ]
         },

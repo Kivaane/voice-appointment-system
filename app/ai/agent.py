@@ -1,4 +1,5 @@
 import re
+from datetime import date, datetime, timedelta
 from typing import Annotated, Literal, TypedDict
 from uuid import uuid4
 
@@ -25,7 +26,7 @@ from app.ai_persistence import (
 )
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import AIEventType, AIMessageRole
+from app.models import AIEventType, AIMessageRole, Service, Staff
 
 
 READ_ONLY_TOOLS = [
@@ -35,24 +36,21 @@ READ_ONLY_TOOLS = [
 
 
 SYSTEM_PROMPT = """
-You are an appointment assistant.
+You are a respectful AI appointment assistant.
 
 Your responsibilities are to:
-- answer questions about appointment services
-- use the service tool when the customer asks what services are offered
-- use the availability tool when the customer asks about available slots
+- help customers book appointments conversationally
+- answer questions about available services
+- check real appointment availability using tools
 - ask for missing information clearly
 - remember relevant details from earlier messages in the same thread
-- remain concise and professional
+- respond like a helpful receptionist, not like a database form
+- never ask customers for internal IDs unless there is no better option
 - never invent appointment availability
 - never claim that an appointment is booked unless a booking tool confirms it
 
-The availability tool requires:
-- service_id
-- requested_date in YYYY-MM-DD format
-- optional staff_id
-
-Booking, cancellation, and rescheduling actions are not available yet.
+Booking, cancellation, and rescheduling execution will be handled only
+through confirmed tools.
 """.strip()
 
 
@@ -83,9 +81,14 @@ class AppointmentAgentState(TypedDict, total=False):
 
     customer_id: int | None
     service_id: int | None
+    service_name: str | None
     staff_id: int | None
+    staff_name: str | None
     requested_date: str | None
+
+    available_services: list[dict[str, object]] | None
     available_slots: list[dict[str, object]] | None
+    selected_slot_summary: str | None
     slot_id: int | None
 
     appointment_id: int | None
@@ -128,6 +131,434 @@ def get_latest_user_message(
             return extract_text_content(message.content)
 
     return ""
+
+
+def normalize_text(text: str) -> str:
+    """Normalize text for simple matching."""
+
+    return re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        text.lower(),
+    ).strip()
+
+
+def get_active_services() -> list[dict[str, object]]:
+    """Load active services from the database for conversation use."""
+
+    database = SessionLocal()
+
+    try:
+        services = (
+            database.query(Service)
+            .filter(Service.is_active.is_(True))
+            .order_by(Service.id)
+            .all()
+        )
+
+        return [
+            {
+                "id": service.id,
+                "name": service.name,
+                "description": service.description,
+                "duration_minutes": service.duration_minutes,
+                "price": (
+                    float(service.price)
+                    if service.price is not None
+                    else None
+                ),
+            }
+            for service in services
+        ]
+
+    finally:
+        database.close()
+
+
+def get_service_by_id(
+    service_id: int,
+) -> dict[str, object] | None:
+    """Load one service by ID."""
+
+    database = SessionLocal()
+
+    try:
+        service = (
+            database.query(Service)
+            .filter(Service.id == service_id)
+            .first()
+        )
+
+        if service is None:
+            return None
+
+        return {
+            "id": service.id,
+            "name": service.name,
+            "description": service.description,
+            "duration_minutes": service.duration_minutes,
+            "price": (
+                float(service.price)
+                if service.price is not None
+                else None
+            ),
+        }
+
+    finally:
+        database.close()
+
+
+def get_active_staff_for_service(
+    service_id: int,
+) -> list[dict[str, object]]:
+    """Load active staff members who can provide a service."""
+
+    database = SessionLocal()
+
+    try:
+        staff_members = (
+            database.query(Staff)
+            .join(Staff.services)
+            .filter(
+                Service.id == service_id,
+                Staff.is_active.is_(True),
+            )
+            .order_by(Staff.id)
+            .all()
+        )
+
+        return [
+            {
+                "id": staff.id,
+                "full_name": staff.full_name,
+                "speciality": staff.speciality,
+            }
+            for staff in staff_members
+        ]
+
+    finally:
+        database.close()
+
+
+def format_price(price: object) -> str:
+    """Format a service price for display."""
+
+    if price is None:
+        return ""
+
+    return f", LKR {float(price):,.0f}"
+
+
+def format_service_options(
+    services: list[dict[str, object]],
+) -> str:
+    """Format services as a friendly numbered list."""
+
+    if not services:
+        return "No active services are available right now."
+
+    lines: list[str] = []
+
+    for index, service in enumerate(services, start=1):
+        description = service.get("description") or "Appointment service"
+        duration = service.get("duration_minutes")
+        price = format_price(service.get("price"))
+
+        lines.append(
+            f"{index}. {service['name']} — {description} "
+            f"({duration} minutes{price})"
+        )
+
+    return "\n".join(lines)
+
+
+def find_service_from_message(
+    user_message: str,
+    services: list[dict[str, object]],
+    allow_numeric_choice: bool,
+) -> dict[str, object] | None:
+    """Resolve a service from natural text or numeric choice."""
+
+    normalized_message = normalize_text(user_message)
+
+    if allow_numeric_choice:
+        number_match = re.fullmatch(
+            r"\s*(\d+)\s*\.?\s*",
+            user_message,
+        )
+
+        if number_match is not None:
+            number = int(number_match.group(1))
+
+            for service in services:
+                if service["id"] == number:
+                    return service
+
+            if 1 <= number <= len(services):
+                return services[number - 1]
+
+    for service in services:
+        service_name = str(service["name"])
+        normalized_name = normalize_text(service_name)
+
+        if normalized_name in normalized_message:
+            return service
+
+        service_words = [
+            word
+            for word in normalized_name.split()
+            if len(word) >= 4
+        ]
+
+        if any(word in normalized_message for word in service_words):
+            return service
+
+    return None
+
+
+def find_staff_from_message(
+    user_message: str,
+    staff_members: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Resolve a staff member from natural text."""
+
+    normalized_message = normalize_text(user_message)
+
+    for staff in staff_members:
+        staff_name = str(staff["full_name"])
+        normalized_name = normalize_text(staff_name)
+
+        if normalized_name in normalized_message:
+            return staff
+
+        name_words = [
+            word
+            for word in normalized_name.split()
+            if len(word) >= 4
+        ]
+
+        if any(word in normalized_message for word in name_words):
+            return staff
+
+    return None
+
+
+def parse_requested_date(
+    user_message: str,
+) -> str | None:
+    """Parse simple natural dates into YYYY-MM-DD."""
+
+    iso_date_match = re.search(
+        r"\b\d{4}-\d{2}-\d{2}\b",
+        user_message,
+    )
+
+    if iso_date_match is not None:
+        return iso_date_match.group(0)
+
+    normalized_message = normalize_text(user_message)
+    today = date.today()
+
+    if "day after tomorrow" in normalized_message:
+        return (today + timedelta(days=2)).isoformat()
+
+    if "tomorrow" in normalized_message:
+        return (today + timedelta(days=1)).isoformat()
+
+    if "today" in normalized_message:
+        return today.isoformat()
+
+    weekdays = {
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
+    }
+
+    for weekday_name, weekday_number in weekdays.items():
+        if weekday_name in normalized_message:
+            days_ahead = (
+                weekday_number - today.weekday()
+            ) % 7
+
+            if "next" in normalized_message or days_ahead == 0:
+                days_ahead += 7
+
+            return (today + timedelta(days=days_ahead)).isoformat()
+
+    return None
+
+
+def parse_datetime(value: object) -> datetime | None:
+    """Parse an ISO datetime safely."""
+
+    if not isinstance(value, str):
+        return None
+
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def format_time(value: object) -> str:
+    """Format an ISO datetime as a friendly time."""
+
+    parsed_value = parse_datetime(value)
+
+    if parsed_value is None:
+        return str(value)
+
+    hour = parsed_value.strftime("%I").lstrip("0")
+    minute = parsed_value.strftime("%M")
+    meridiem = parsed_value.strftime("%p")
+
+    return f"{hour}:{minute} {meridiem}"
+
+
+def format_date(value: str | None) -> str:
+    """Format YYYY-MM-DD into a friendly date."""
+
+    if value is None:
+        return "that date"
+
+    try:
+        parsed_date = date.fromisoformat(value)
+    except ValueError:
+        return value
+
+    return parsed_date.strftime("%A, %d %B %Y")
+
+
+def format_slot_summary(
+    slot: dict[str, object],
+) -> str:
+    """Format one selected slot."""
+
+    staff_name = slot.get("staff_name") or f"staff {slot.get('staff_id')}"
+    service_name = slot.get("service_name") or "appointment"
+
+    return (
+        f"{service_name} at {format_time(slot.get('start_datetime'))} "
+        f"with {staff_name}"
+    )
+
+
+def format_available_slots(
+    slots: list[dict[str, object]],
+) -> str:
+    """Format available slots as friendly numbered options."""
+
+    lines: list[str] = []
+
+    for index, slot in enumerate(slots, start=1):
+        staff_name = (
+            slot.get("staff_name")
+            or f"staff {slot.get('staff_id')}"
+        )
+
+        lines.append(
+            f"{index}. {format_time(slot.get('start_datetime'))} – "
+            f"{format_time(slot.get('end_datetime'))} "
+            f"with {staff_name}"
+        )
+
+    return "\n".join(lines)
+
+
+def find_slot_from_message(
+    user_message: str,
+    available_slots: list[dict[str, object]] | None,
+) -> dict[str, object] | None:
+    """Resolve a chosen slot from natural text."""
+
+    if not available_slots:
+        return None
+
+    normalized_message = normalize_text(user_message)
+
+    slot_id_match = re.search(
+        r"\bslot(?:\s+id)?\s*(?:is|=|:)?\s*(\d+)\b",
+        user_message,
+        flags=re.IGNORECASE,
+    )
+
+    if slot_id_match is not None:
+        selected_slot_id = int(slot_id_match.group(1))
+
+        for slot in available_slots:
+            if slot.get("slot_id") == selected_slot_id:
+                return slot
+
+    ordinal_choices = {
+        "first": 1,
+        "1st": 1,
+        "one": 1,
+        "second": 2,
+        "2nd": 2,
+        "two": 2,
+        "third": 3,
+        "3rd": 3,
+        "three": 3,
+        "fourth": 4,
+        "4th": 4,
+        "four": 4,
+    }
+
+    for word, option_number in ordinal_choices.items():
+        if word in normalized_message:
+            if 1 <= option_number <= len(available_slots):
+                return available_slots[option_number - 1]
+
+    bare_number_match = re.fullmatch(
+        r"\s*(\d+)\s*\.?\s*",
+        user_message,
+    )
+
+    if bare_number_match is not None:
+        number = int(bare_number_match.group(1))
+
+        for slot in available_slots:
+            if slot.get("slot_id") == number:
+                return slot
+
+        if 1 <= number <= len(available_slots):
+            return available_slots[number - 1]
+
+    for slot in available_slots:
+        start_datetime = parse_datetime(
+            slot.get("start_datetime"),
+        )
+
+        if start_datetime is None:
+            continue
+
+        hour_24 = str(start_datetime.hour)
+        hour_12 = str(
+            start_datetime.hour
+            if start_datetime.hour <= 12
+            else start_datetime.hour - 12
+        )
+        minute = f"{start_datetime.minute:02d}"
+
+        possible_times = {
+            f"{hour_24}",
+            f"{hour_12}",
+            f"{hour_12} {start_datetime.strftime('%p').lower()}",
+            f"{hour_12}:{minute}",
+            f"{hour_12}:{minute} {start_datetime.strftime('%p').lower()}",
+        }
+
+        if any(
+            time_text in normalized_message
+            for time_text in possible_times
+        ):
+            return slot
+
+    return None
 
 
 def detect_intent(
@@ -187,9 +618,13 @@ def detect_intent(
         keyword in user_message
         for keyword in (
             "book",
+            "appointment",
             "make an appointment",
             "need an appointment",
+            "need a",
             "schedule an appointment",
+            "see a doctor",
+            "see the doctor",
         )
     ):
         intent = "book_appointment"
@@ -220,6 +655,23 @@ def extract_details(
     user_message = get_latest_user_message(state)
     extracted: AppointmentAgentState = {}
 
+    selected_slot = find_slot_from_message(
+        user_message=user_message,
+        available_slots=state.get("available_slots"),
+    )
+
+    if selected_slot is not None:
+        extracted["slot_id"] = int(selected_slot["slot_id"])
+        extracted["staff_id"] = int(selected_slot["staff_id"])
+        extracted["staff_name"] = (
+            str(selected_slot["staff_name"])
+            if selected_slot.get("staff_name") is not None
+            else None
+        )
+        extracted["selected_slot_summary"] = format_slot_summary(
+            selected_slot,
+        )
+
     id_patterns = {
         "customer_id": (
             r"\bcustomer(?:\s+id)?\s*(?:is|=|:)?\s*(\d+)\b"
@@ -248,13 +700,17 @@ def extract_details(
         if match is not None:
             extracted[field_name] = int(match.group(1))
 
-    date_match = re.search(
-        r"\b\d{4}-\d{2}-\d{2}\b",
-        user_message,
-    )
+    parsed_date = parse_requested_date(user_message)
 
-    if date_match is not None:
-        extracted["requested_date"] = date_match.group(0)
+    if parsed_date is not None:
+        previous_date = state.get("requested_date")
+
+        if previous_date is not None and parsed_date != previous_date:
+            extracted["available_slots"] = None
+            extracted["slot_id"] = None
+            extracted["selected_slot_summary"] = None
+
+        extracted["requested_date"] = parsed_date
 
     if state.get("intent") == "cancel_appointment":
         reason_match = re.search(
@@ -269,6 +725,95 @@ def extract_details(
             )
 
     return extracted
+
+
+def resolve_named_entities(
+    state: AppointmentAgentState,
+) -> AppointmentAgentState:
+    """Resolve natural service and staff names into database IDs."""
+
+    intent = state.get("intent")
+
+    if intent not in {
+        "book_appointment",
+        "check_availability",
+        "list_services",
+    }:
+        return {}
+
+    user_message = get_latest_user_message(state)
+    services = get_active_services()
+    updates: AppointmentAgentState = {
+        "available_services": services,
+    }
+
+    allow_numeric_service_choice = (
+        state.get("service_id") is None
+        and not state.get("available_slots")
+    )
+
+    matched_service = find_service_from_message(
+        user_message=user_message,
+        services=services,
+        allow_numeric_choice=allow_numeric_service_choice,
+    )
+
+    if matched_service is not None:
+        previous_service_id = state.get("service_id")
+        new_service_id = int(matched_service["id"])
+
+        updates["service_id"] = new_service_id
+        updates["service_name"] = str(matched_service["name"])
+
+        if previous_service_id != new_service_id:
+            updates["available_slots"] = None
+            updates["slot_id"] = None
+            updates["selected_slot_summary"] = None
+            updates["staff_id"] = None
+            updates["staff_name"] = None
+
+    elif (
+        state.get("service_id") is not None
+        and state.get("service_name") is None
+    ):
+        service = get_service_by_id(
+            int(state["service_id"]),
+        )
+
+        if service is not None:
+            updates["service_name"] = str(service["name"])
+
+    resolved_service_id = updates.get(
+        "service_id",
+        state.get("service_id"),
+    )
+
+    if resolved_service_id is None:
+        return updates
+
+    staff_members = get_active_staff_for_service(
+        int(resolved_service_id),
+    )
+
+    matched_staff = find_staff_from_message(
+        user_message=user_message,
+        staff_members=staff_members,
+    )
+
+    if matched_staff is not None:
+        updates["staff_id"] = int(matched_staff["id"])
+        updates["staff_name"] = str(matched_staff["full_name"])
+
+    elif (
+        state.get("staff_id") is None
+        and updates.get("staff_id") is None
+        and len(staff_members) == 1
+    ):
+        only_staff = staff_members[0]
+        updates["staff_id"] = int(only_staff["id"])
+        updates["staff_name"] = str(only_staff["full_name"])
+
+    return updates
 
 
 def lookup_conversation_availability(
@@ -286,6 +831,10 @@ def lookup_conversation_availability(
 
     service_id = state.get("service_id")
     requested_date = state.get("requested_date")
+    slot_id = state.get("slot_id")
+
+    if slot_id is not None:
+        return {}
 
     if service_id is None or requested_date is None:
         return {}
@@ -319,10 +868,10 @@ def calculate_missing_fields(
 
     if intent == "book_appointment":
         required_fields = (
-            "customer_id",
             "service_id",
-            "staff_id",
+            "requested_date",
             "slot_id",
+            "customer_id",
         )
 
     elif intent == "check_availability":
@@ -363,80 +912,139 @@ def determine_next_question(
     intent = state.get("intent")
     next_question: str | None = None
 
-    if intent == "book_appointment":
+    services = state.get("available_services") or get_active_services()
+
+    if intent == "list_services":
+        next_question = (
+            "These are the services currently available:\n\n"
+            + format_service_options(services)
+            + "\n\nWould you like to book one of these?"
+        )
+
+    elif intent == "book_appointment":
         if state.get("service_id") is None:
-            next_question = "Which service would you like to book?"
+            next_question = (
+                "Sure, I can help you book an appointment.\n\n"
+                "Which service would you like?\n\n"
+                "Available services:\n"
+                + format_service_options(services)
+            )
 
         elif state.get("requested_date") is None:
-            next_question = "Which date would you prefer?"
+            service_name = state.get("service_name") or "that service"
+            staff_members = get_active_staff_for_service(
+                int(state["service_id"]),
+            )
+
+            if len(staff_members) == 1:
+                staff_note = (
+                    f"{service_name} is currently handled by "
+                    f"{staff_members[0]['full_name']}."
+                )
+            elif staff_members:
+                staff_lines = [
+                    (
+                        f"{index}. {staff['full_name']} — "
+                        f"{staff.get('speciality') or 'Staff member'}"
+                    )
+                    for index, staff in enumerate(
+                        staff_members,
+                        start=1,
+                    )
+                ]
+
+                staff_note = (
+                    "Available doctors/staff for this service:\n"
+                    + "\n".join(staff_lines)
+                    + "\n\nYou can mention a preferred doctor/staff "
+                    "member, or I can show all available slots."
+                )
+            else:
+                staff_note = (
+                    "I will check the available staff for this service."
+                )
+
+            next_question = (
+                f"Sure, I can help you book {service_name}.\n\n"
+                f"{staff_note}\n\n"
+                "Which date would you prefer? "
+                "You can say tomorrow, next Monday, or use YYYY-MM-DD."
+            )
 
         elif state.get("slot_id") is None:
             available_slots = state.get("available_slots")
+            service_name = state.get("service_name") or "appointment"
+            friendly_date = format_date(
+                state.get("requested_date"),
+            )
 
             if not available_slots:
                 next_question = (
-                    "There are no available appointment slots "
-                    "for that service and date. "
+                    f"There are no available {service_name} slots "
+                    f"for {friendly_date}.\n\n"
                     "Which other date would you prefer?"
                 )
             else:
-                slot_lines = [
-                    (
-                        f"{slot['slot_id']}: "
-                        f"{slot['start_datetime']} "
-                        f"to {slot['end_datetime']} "
-                        f"with staff {slot['staff_id']}"
-                    )
-                    for slot in available_slots
-                ]
-
                 next_question = (
-                    "These appointment slots are available:\n"
-                    + "\n".join(slot_lines)
-                    + "\nWhich slot would you prefer?"
+                    f"I found these {service_name} slots for "
+                    f"{friendly_date}:\n\n"
+                    + format_available_slots(available_slots)
+                    + "\n\nWhich one would you prefer?"
                 )
 
         elif state.get("customer_id") is None:
-            next_question = "What is your customer ID?"
+            selected_slot_summary = (
+                state.get("selected_slot_summary")
+                or "the selected appointment slot"
+            )
+
+            next_question = (
+                f"Great. You selected {selected_slot_summary}.\n\n"
+                "May I have your full name and phone number "
+                "for the booking?"
+            )
 
     elif intent == "check_availability":
         if state.get("service_id") is None:
             next_question = (
-                "Which service would you like to check?"
+                "Which service would you like to check?\n\n"
+                "Available services:\n"
+                + format_service_options(services)
             )
 
         elif state.get("requested_date") is None:
+            service_name = state.get("service_name") or "that service"
+
             next_question = (
-                "Which date would you like to check?"
+                f"Which date would you like to check for "
+                f"{service_name}?"
             )
 
         else:
             available_slots = state.get("available_slots")
+            service_name = state.get("service_name") or "appointment"
+            friendly_date = format_date(
+                state.get("requested_date"),
+            )
 
             if not available_slots:
                 next_question = (
-                    "There are no available appointment slots "
-                    "for that service and date."
+                    f"There are no available {service_name} slots "
+                    f"for {friendly_date}."
                 )
             else:
-                slot_lines = [
-                    (
-                        f"{slot['slot_id']}: "
-                        f"{slot['start_datetime']} "
-                        f"to {slot['end_datetime']} "
-                        f"with staff {slot['staff_id']}"
-                    )
-                    for slot in available_slots
-                ]
-
                 next_question = (
-                    "These appointment slots are available:\n"
-                    + "\n".join(slot_lines)
+                    f"These {service_name} slots are available "
+                    f"for {friendly_date}:\n\n"
+                    + format_available_slots(available_slots)
                 )
 
     elif intent == "cancel_appointment":
         if state.get("appointment_id") is None:
-            next_question = "What is your appointment ID?"
+            next_question = (
+                "Sure, I can help cancel an appointment. "
+                "What is your appointment ID?"
+            )
 
         elif state.get("cancellation_reason") is None:
             next_question = (
@@ -445,7 +1053,10 @@ def determine_next_question(
 
     elif intent == "reschedule_appointment":
         if state.get("appointment_id") is None:
-            next_question = "What is your appointment ID?"
+            next_question = (
+                "Sure, I can help reschedule an appointment. "
+                "What is your appointment ID?"
+            )
 
         elif state.get("slot_id") is None:
             next_question = (
@@ -503,6 +1114,12 @@ def build_appointment_agent():
         extract_details,
     )
 
+
+    graph_builder.add_node(
+        "resolve_named_entities",
+        resolve_named_entities,
+    )
+
     graph_builder.add_node(
         "calculate_missing_fields",
         calculate_missing_fields,
@@ -540,6 +1157,11 @@ def build_appointment_agent():
 
     graph_builder.add_edge(
         "extract_details",
+        "resolve_named_entities",
+    )
+
+    graph_builder.add_edge(
+        "resolve_named_entities",
         "calculate_missing_fields",
     )
 
