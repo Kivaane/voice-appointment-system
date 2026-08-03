@@ -15,6 +15,11 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from app.ai.model import get_chat_model
+from app.appointment_services import (
+    AppointmentConflictError,
+    InvalidAppointmentError,
+    create_appointment,
+)
 from app.ai.tools import (
     check_available_slots,
     list_available_services,
@@ -27,7 +32,7 @@ from app.ai_persistence import (
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models import AIEventType, AIMessageRole, Customer, Service, Staff
-
+from app.schemas import AppointmentCreate
 
 READ_ONLY_TOOLS = [
     list_available_services,
@@ -95,6 +100,7 @@ class AppointmentAgentState(TypedDict, total=False):
     slot_id: int | None
 
     appointment_id: int | None
+    appointment_reference_number: str | None
     cancellation_reason: str | None
 
     missing_fields: list[str]
@@ -743,6 +749,119 @@ def format_booking_confirmation_summary(
         "Should I confirm this booking?"
     )
 
+def is_confirmation_yes_message(
+    user_message: str,
+) -> bool:
+    """Return True when the user confirms a pending booking."""
+
+    normalized_message = normalize_text(user_message)
+
+    yes_phrases = {
+        "yes",
+        "yes confirm",
+        "confirm",
+        "confirm it",
+        "book it",
+        "okay confirm",
+        "ok confirm",
+        "please confirm",
+        "go ahead",
+        "yes book it",
+    }
+
+    return normalized_message in yes_phrases
+
+
+def is_confirmation_no_message(
+    user_message: str,
+) -> bool:
+    """Return True when the user rejects a pending booking."""
+
+    normalized_message = normalize_text(user_message)
+
+    no_phrases = {
+        "no",
+        "no thanks",
+        "dont confirm",
+        "do not confirm",
+        "not now",
+        "cancel",
+        "cancel it",
+        "leave it",
+    }
+
+    return normalized_message in no_phrases
+
+
+def create_confirmed_appointment_from_state(
+    state: AppointmentAgentState,
+) -> dict[str, object]:
+    """Create a confirmed appointment using resolved state values."""
+
+    database = SessionLocal()
+
+    try:
+        appointment = create_appointment(
+            database=database,
+            appointment_data=AppointmentCreate(
+                customer_id=int(state["customer_id"]),
+                service_id=int(state["service_id"]),
+                staff_id=int(state["staff_id"]),
+                slot_id=int(state["slot_id"]),
+                customer_notes=None,
+            ),
+        )
+
+        return {
+            "id": appointment.id,
+            "reference_number": appointment.reference_number,
+            "start_datetime": appointment.start_datetime.isoformat(),
+            "end_datetime": appointment.end_datetime.isoformat(),
+        }
+
+    finally:
+        database.close()
+
+
+def format_confirmed_appointment_response(
+    state: AppointmentAgentState,
+    appointment: dict[str, object],
+) -> str:
+    """Format the final confirmed appointment response."""
+
+    selected_slot = find_selected_slot(state)
+
+    service_name = state.get("service_name") or "Appointment"
+    staff_name = state.get("staff_name") or "Selected staff"
+
+    if selected_slot is not None:
+        start_time = format_time(
+            selected_slot.get("start_datetime"),
+        )
+        end_time = format_time(
+            selected_slot.get("end_datetime"),
+        )
+    else:
+        start_time = format_time(
+            appointment.get("start_datetime"),
+        )
+        end_time = format_time(
+            appointment.get("end_datetime"),
+        )
+
+    friendly_date = format_date(
+        state.get("requested_date"),
+    )
+
+    return (
+        "Your appointment is confirmed.\n\n"
+        f"Reference: {appointment['reference_number']}\n"
+        f"Service: {service_name}\n"
+        f"Doctor/Staff: {staff_name}\n"
+        f"Date: {friendly_date}\n"
+        f"Time: {start_time} – {end_time}"
+    )
+
 
 def detect_intent(
     state: AppointmentAgentState,
@@ -750,6 +869,22 @@ def detect_intent(
     """Identify the user's current appointment intent."""
 
     user_message = get_latest_user_message(state).lower()
+
+    if (
+        state.get("confirmation_status") == "pending"
+        and state.get("appointment_id") is None
+    ):
+        if is_confirmation_yes_message(user_message):
+            return {
+                "intent": "book_appointment",
+                "confirmation_status": "confirmed",
+            }
+
+        if is_confirmation_no_message(user_message):
+            return {
+                "intent": "book_appointment",
+                "confirmation_status": "rejected",
+            }
 
     if any(
         keyword in user_message
@@ -1043,6 +1178,77 @@ def resolve_customer_details(
         "customer_phone_number": str(customer["phone_number"]),
     }
 
+def confirm_or_reject_booking(
+    state: AppointmentAgentState,
+) -> AppointmentAgentState:
+    """Create the appointment after the user confirms the summary."""
+
+    if state.get("intent") != "book_appointment":
+        return {}
+
+    if state.get("appointment_id") is not None:
+        return {}
+
+    if state.get("confirmation_status") == "rejected":
+        return {
+            "next_question": (
+                "No problem. I have not booked this appointment. "
+                "You can choose a different service, date, or slot."
+            ),
+            "booking_summary": None,
+        }
+
+    if state.get("confirmation_status") != "confirmed":
+        return {}
+
+    required_fields = [
+        "customer_id",
+        "service_id",
+        "staff_id",
+        "slot_id",
+    ]
+
+    missing_fields = [
+        field_name
+        for field_name in required_fields
+        if state.get(field_name) is None
+    ]
+
+    if missing_fields:
+        return {
+            "confirmation_status": "pending",
+            "next_question": (
+                "I still need a little more information before I can "
+                "confirm the booking."
+            ),
+        }
+
+    try:
+        appointment = create_confirmed_appointment_from_state(state)
+
+    except (AppointmentConflictError, InvalidAppointmentError) as error:
+        return {
+            "confirmation_status": "pending",
+            "next_question": (
+                "I could not confirm this appointment because "
+                f"{error} Please choose another available slot."
+            ),
+        }
+
+    final_response = format_confirmed_appointment_response(
+        state=state,
+        appointment=appointment,
+    )
+
+    return {
+        "appointment_id": int(appointment["id"]),
+        "appointment_reference_number": str(
+            appointment["reference_number"]
+        ),
+        "confirmation_status": "confirmed",
+        "next_question": final_response,
+    }
+
 
 def lookup_conversation_availability(
     state: AppointmentAgentState,
@@ -1141,6 +1347,22 @@ def determine_next_question(
     next_question: str | None = None
 
     services = state.get("available_services") or get_active_services()
+
+    if (
+        intent == "book_appointment"
+        and state.get("appointment_id") is not None
+    ):
+        return {
+            "next_question": state.get("next_question"),
+        }
+
+    if (
+        intent == "book_appointment"
+        and state.get("confirmation_status") == "rejected"
+    ):
+        return {
+            "next_question": state.get("next_question"),
+        }
 
     if intent == "list_services":
         next_question = (
@@ -1365,6 +1587,10 @@ def build_appointment_agent():
         "resolve_customer_details",
         resolve_customer_details,
     )
+    graph_builder.add_node(
+        "confirm_or_reject_booking",
+        confirm_or_reject_booking,
+    )
 
     graph_builder.add_node(
         "calculate_missing_fields",
@@ -1413,6 +1639,11 @@ def build_appointment_agent():
 
     graph_builder.add_edge(
         "resolve_customer_details",
+        "confirm_or_reject_booking",
+    )
+
+    graph_builder.add_edge(
+        "confirm_or_reject_booking",
         "calculate_missing_fields",
     )
 

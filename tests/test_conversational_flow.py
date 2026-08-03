@@ -286,3 +286,126 @@ def test_booking_conversation_collects_customer_and_shows_summary() -> None:
         full_name="Kivaane Anton",
         phone_number="0774588691",
     )
+
+
+def test_booking_conversation_confirms_real_appointment() -> None:
+    thread_id = "booking-conversation-confirm-appointment-test-001"
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+    mocked_tool = MagicMock()
+    mocked_tool.run.return_value = DEMO_SLOTS
+
+    with (
+        patch(
+            "app.ai.agent.get_active_services",
+            return_value=DEMO_SERVICES,
+        ),
+        patch(
+            "app.ai.agent.get_active_staff_for_service",
+            return_value=DEMO_STAFF,
+        ),
+        patch(
+            "app.ai.agent.check_available_slots",
+            mocked_tool,
+        ),
+        patch(
+            "app.ai.agent.get_or_create_customer_from_details",
+            return_value={
+                "id": 11,
+                "full_name": "Kivaane Anton",
+                "phone_number": "0774588691",
+            },
+        ),
+        patch(
+            "app.ai.agent.create_confirmed_appointment_from_state",
+            return_value={
+                "id": 21,
+                "reference_number": "APT-TEST123",
+                "start_datetime": "2026-08-05T10:00:00",
+                "end_datetime": "2026-08-05T10:30:00",
+            },
+        ) as mocked_create_appointment,
+    ):
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content="I need an appointment."
+                    )
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="Dental care.")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="2026-08-05")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="first one")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content=(
+                            "Kivaane Anton and contact number "
+                            "0774588691"
+                        )
+                    )
+                ]
+            },
+            config=config,
+        )
+
+        result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="yes confirm")
+                ]
+            },
+            config=config,
+        )
+
+        final_response = result["messages"][-1]
+        final_text = extract_text_content(final_response.content)
+
+        assert isinstance(final_response, AIMessage)
+
+        assert "Your appointment is confirmed." in final_text
+        assert "Reference: APT-TEST123" in final_text
+        assert "Service: Dental care" in final_text
+        assert "Doctor/Staff: Dr. Perera" in final_text
+        assert "Date: Wednesday, 05 August 2026" in final_text
+        assert "Time: 10:00 AM – 10:30 AM" in final_text
+
+        assert result.get("appointment_id") == 21
+        assert result.get("appointment_reference_number") == "APT-TEST123"
+        assert result.get("confirmation_status") == "confirmed"
+
+    mocked_create_appointment.assert_called_once()
