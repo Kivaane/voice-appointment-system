@@ -1579,19 +1579,27 @@ def extract_details(
         if match is not None:
             extracted[field_name] = int(match.group(1))
 
-    parsed_date = parse_requested_date(user_message)
+    parsed_requested_date = None
 
-    if parsed_date is not None:
-        previous_date = state.get("requested_date")
+    if selected_slot is None:
+        parsed_requested_date = parse_requested_date(
+            user_message,
+        )
 
-        if previous_date is not None and parsed_date != previous_date:
+    previous_date = state.get("requested_date")
+
+    if parsed_requested_date is not None:
+        if (
+            previous_date is not None
+            and parsed_requested_date != previous_date
+        ):
             extracted["available_slots"] = None
             extracted["slot_id"] = None
             extracted["selected_slot_summary"] = None
             extracted["booking_summary"] = None
             extracted["confirmation_status"] = "not_requested"
 
-        extracted["requested_date"] = parsed_date
+        extracted["requested_date"] = parsed_requested_date
 
     if (
         state.get("confirmation_status") == "pending"
@@ -3135,7 +3143,12 @@ def extract_details(
         if match is not None:
             extracted[field_name] = int(match.group(1))
 
-    parsed_date = parse_requested_date(user_message)
+        parsed_date = None
+
+    if selected_slot is None:
+        parsed_date = parse_requested_date(
+            user_message,
+        )
 
     if parsed_date is not None:
         previous_date = state.get("requested_date")

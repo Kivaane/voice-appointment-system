@@ -1028,3 +1028,70 @@ def test_booking_conversation_allows_second_slot_before_confirmation() -> None:
             "Dental care at 2:30 PM with Dr. Perera"
         )
         assert result.get("confirmation_status") == "pending"
+
+def test_booking_conversation_treats_1st_as_slot_choice_not_date() -> None:
+    thread_id = "booking-conversation-1st-slot-not-date-test-001"
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+    mocked_tool = MagicMock()
+    mocked_tool.run.return_value = DEMO_SLOTS
+
+    with (
+        patch(
+            "app.ai.agent.get_active_services",
+            return_value=DEMO_SERVICES,
+        ),
+        patch(
+            "app.ai.agent.get_active_staff_for_service",
+            return_value=DEMO_STAFF,
+        ),
+        patch(
+            "app.ai.agent.check_available_slots",
+            mocked_tool,
+        ),
+    ):
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="I need a dental appointment.")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="2026-08-05")
+                ]
+            },
+            config=config,
+        )
+
+        result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="1st")
+                ]
+            },
+            config=config,
+        )
+
+        final_text = extract_text_content(
+            result["messages"][-1].content
+        )
+
+        assert "Great. You selected Dental care at 10:00 AM" in final_text
+        assert "May I have your full name and phone number" in final_text
+        assert "September" not in final_text
+
+        assert result.get("requested_date") == "2026-08-05"
+        assert result.get("slot_id") == 7
+        assert result.get("selected_slot_summary") == (
+            "Dental care at 10:00 AM with Dr. Perera"
+        )
