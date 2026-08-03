@@ -1327,3 +1327,217 @@ def test_booking_conversation_starts_new_booking_after_confirmed_appointment() -
         )
         assert second_booking_result.get("service_id") == 7
         assert second_booking_result.get("slot_id") == 20
+
+def test_service_numeric_choice_uses_display_option_before_database_id() -> None:
+    thread_id = "booking-conversation-service-option-number-test-001"
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+    services = [
+        {
+            "id": 4,
+            "name": "Dental care",
+            "description": "Dental checkups and treatment appointments.",
+            "duration_minutes": 30,
+            "price": 3500.00,
+        },
+        {
+            "id": 5,
+            "name": "General consultation",
+            "description": "General medical consultation appointment.",
+            "duration_minutes": 20,
+            "price": 2500.00,
+        },
+        {
+            "id": 6,
+            "name": "Dermatology",
+            "description": "Skin care consultation appointment.",
+            "duration_minutes": 30,
+            "price": 4000.00,
+        },
+        {
+            "id": 7,
+            "name": "Physiotherapy",
+            "description": "Physiotherapy treatment appointment.",
+            "duration_minutes": 45,
+            "price": 4500.00,
+        },
+    ]
+
+    def get_staff(service_id: int) -> list[dict[str, object]]:
+        if service_id == 7:
+            return [
+                {
+                    "id": 6,
+                    "full_name": "Therapist Nimal",
+                    "speciality": "Physiotherapy",
+                }
+            ]
+
+        return [
+            {
+                "id": 1,
+                "full_name": "Dr. Perera",
+                "speciality": "Dental care",
+            }
+        ]
+
+    with (
+        patch(
+            "app.ai.agent.get_active_services",
+            return_value=services,
+        ),
+        patch(
+            "app.ai.agent.get_active_staff_for_service",
+            side_effect=get_staff,
+        ),
+    ):
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="I want to book another appointment")
+                ]
+            },
+            config=config,
+        )
+
+        result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="4")
+                ]
+            },
+            config=config,
+        )
+
+        final_text = extract_text_content(
+            result["messages"][-1].content
+        )
+
+        assert "Physiotherapy" in final_text
+        assert "Therapist Nimal" in final_text
+        assert "Dental care" not in final_text
+
+        assert result.get("service_id") == 7
+        assert result.get("service_name") == "Physiotherapy"
+
+def test_booking_conversation_does_not_repeat_confirmation_after_thank_you() -> None:
+    thread_id = "booking-conversation-thank-you-after-confirmed-test-001"
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+    mocked_tool = MagicMock()
+    mocked_tool.run.return_value = DEMO_SLOTS
+
+    with (
+        patch(
+            "app.ai.agent.get_active_services",
+            return_value=DEMO_SERVICES,
+        ),
+        patch(
+            "app.ai.agent.get_active_staff_for_service",
+            return_value=DEMO_STAFF,
+        ),
+        patch(
+            "app.ai.agent.check_available_slots",
+            mocked_tool,
+        ),
+        patch(
+            "app.ai.agent.get_or_create_customer_from_details",
+            return_value={
+                "id": 11,
+                "full_name": "Kivaane Anton",
+                "phone_number": "0774588691",
+            },
+        ),
+        patch(
+            "app.ai.agent.create_confirmed_appointment_from_state",
+            return_value={
+                "id": 101,
+                "reference_number": "APT-DENTAL-001",
+                "start_datetime": "2026-08-05T10:00:00",
+                "end_datetime": "2026-08-05T10:30:00",
+            },
+        ),
+    ):
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="I need a dental appointment.")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="2026-08-05")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="first one")
+                ]
+            },
+            config=config,
+        )
+
+        appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content=(
+                            "Kivaane Anton and contact number "
+                            "0774588691"
+                        )
+                    )
+                ]
+            },
+            config=config,
+        )
+
+        confirmed_result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="yes confirm")
+                ]
+            },
+            config=config,
+        )
+
+        confirmed_text = extract_text_content(
+            confirmed_result["messages"][-1].content
+        )
+
+        assert "Your appointment is confirmed." in confirmed_text
+        assert "APT-DENTAL-001" in confirmed_text
+
+        thank_you_result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="oki thank you")
+                ]
+            },
+            config=config,
+        )
+
+        thank_you_text = extract_text_content(
+            thank_you_result["messages"][-1].content
+        )
+
+        assert "You're welcome" in thank_you_text
+        assert "Your appointment is confirmed." not in thank_you_text
+        assert "APT-DENTAL-001" not in thank_you_text
