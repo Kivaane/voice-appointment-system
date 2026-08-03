@@ -1262,6 +1262,34 @@ def is_service_correction_message(
         for phrase in service_change_phrases
     )
 
+
+def is_thank_you_message(
+    user_message: str,
+) -> bool:
+    """Return True when the user is closing politely after help."""
+
+    normalized_message = normalize_text(user_message)
+
+    thank_you_phrases = (
+        "thank you",
+        "thanks",
+        "thank u",
+        "oki thank you",
+        "ok thank you",
+        "okay thank you",
+        "oki thanks",
+        "ok thanks",
+        "okay thanks",
+        "thats all",
+        "that is all",
+        "all good",
+    )
+
+    return any(
+        phrase in normalized_message
+        for phrase in thank_you_phrases
+    )
+
 def create_confirmed_appointment_from_state(
     state: AppointmentAgentState,
 ) -> dict[str, object]:
@@ -1988,6 +2016,17 @@ def determine_next_question(
 
     intent = state.get("intent")
     next_question: str | None = None
+
+    if (
+        state.get("appointment_id") is not None
+        and is_thank_you_message(get_latest_user_message(state))
+    ):
+        return {
+            "next_question": (
+                "You're welcome. Let me know if you need help "
+                "with anything else."
+            ),
+        }
 
     services = state.get("available_services") or get_active_services()
 
@@ -2886,6 +2925,34 @@ def is_service_correction_message(
         for phrase in service_change_phrases
     )
 
+
+def is_thank_you_message(
+    user_message: str,
+) -> bool:
+    """Return True when the user is closing politely after help."""
+
+    normalized_message = normalize_text(user_message)
+
+    thank_you_phrases = (
+        "thank you",
+        "thanks",
+        "thank u",
+        "oki thank you",
+        "ok thank you",
+        "okay thank you",
+        "oki thanks",
+        "ok thanks",
+        "okay thanks",
+        "thats all",
+        "that is all",
+        "all good",
+    )
+
+    return any(
+        phrase in normalized_message
+        for phrase in thank_you_phrases
+    )
+
 def create_confirmed_appointment_from_state(
     state: AppointmentAgentState,
 ) -> dict[str, object]:
@@ -3585,6 +3652,17 @@ def determine_next_question(
 
     intent = state.get("intent")
     next_question: str | None = None
+
+    if (
+        state.get("appointment_id") is not None
+        and is_thank_you_message(get_latest_user_message(state))
+    ):
+        return {
+            "next_question": (
+                "You're welcome. Let me know if you need help "
+                "with anything else."
+            ),
+        }
 
     services = state.get("available_services") or get_active_services()
 
