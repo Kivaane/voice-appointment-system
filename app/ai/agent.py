@@ -1,4 +1,4 @@
-import re
+﻿import re
 from datetime import date, datetime, timedelta
 from typing import Annotated, Literal, TypedDict
 from uuid import uuid4
@@ -32,7 +32,14 @@ from app.ai_persistence import (
 )
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import AIEventType, AIMessageRole, Customer, Service, Staff
+from app.models import (
+    AIEventType,
+    AIMessageRole,
+    Appointment,
+    Customer,
+    Service,
+    Staff,
+)
 from app.schemas import AppointmentCreate
 
 READ_ONLY_TOOLS = [
@@ -151,6 +158,57 @@ def normalize_text(text: str) -> str:
         " ",
         text.lower(),
     ).strip()
+
+
+def extract_appointment_reference(
+    user_message: str,
+) -> str | None:
+    """Extract an appointment reference such as APT-871E6728."""
+
+    reference_match = re.search(
+        r"\bAPT-[A-Z0-9]+\b",
+        user_message,
+        flags=re.IGNORECASE,
+    )
+
+    if reference_match is None:
+        return None
+
+    return reference_match.group(0).upper()
+
+
+def get_appointment_by_reference(
+    reference_number: str,
+) -> dict[str, object] | None:
+    """Load the appointment details needed by the reschedule flow."""
+
+    database = SessionLocal()
+
+    try:
+        appointment = (
+            database.query(Appointment)
+            .filter(
+                Appointment.reference_number == reference_number,
+            )
+            .first()
+        )
+
+        if appointment is None:
+            return None
+
+        return {
+            "appointment_id": appointment.id,
+            "appointment_reference_number": (
+                appointment.reference_number
+            ),
+            "service_id": appointment.service_id,
+            "service_name": appointment.service.name,
+            "staff_id": appointment.staff_id,
+            "staff_name": appointment.staff.full_name,
+        }
+
+    finally:
+        database.close()
 
 
 def get_active_services() -> list[dict[str, object]]:
@@ -973,6 +1031,94 @@ def is_thank_you_message(
         for phrase in thank_you_phrases
     )
 
+
+def is_human_handoff_message(
+    user_message: str,
+) -> bool:
+    """Return True when the user asks to continue with a person."""
+
+    normalized_message = normalize_text(user_message)
+    handoff_phrases = (
+        "transfer to human",
+        "talk to human",
+        "speak to human",
+        "front desk",
+        "receptionist",
+    )
+
+    return (
+        normalized_message in {"human", "staff"}
+        or any(
+            phrase in normalized_message
+            for phrase in handoff_phrases
+        )
+    )
+
+
+def is_graceful_exit_message(
+    user_message: str,
+) -> bool:
+    """Return True when the user politely stops the current request."""
+
+    normalized_message = normalize_text(user_message)
+    exit_phrases = (
+        "thank you",
+        "thanks",
+        "sorry",
+        "no problem",
+        "leave it",
+        "cancel this request",
+    )
+
+    return any(
+        phrase in normalized_message
+        for phrase in exit_phrases
+    )
+
+
+def format_graceful_exit_response(
+    user_message: str,
+) -> str:
+    """Format a polite controlled response that exits the active flow."""
+
+    if is_thank_you_message(user_message):
+        return (
+            "You're welcome. Let me know if you need help "
+            "with anything else."
+        )
+
+    normalized_message = normalize_text(user_message)
+
+    if "sorry" in normalized_message or "no problem" in normalized_message:
+        return (
+            "No problem. Let me know if you need help with "
+            "anything else."
+        )
+
+    return (
+        "No problem. I'll stop this request. Let me know if you "
+        "need help with anything else."
+    )
+
+
+def is_explicit_new_booking_message(
+    user_message: str,
+) -> bool:
+    """Return True only for an explicit request to leave rescheduling."""
+
+    normalized_message = normalize_text(user_message)
+    new_booking_phrases = (
+        "book another appointment",
+        "book new appointment",
+        "new appointment",
+        "start new booking",
+    )
+
+    return any(
+        phrase in normalized_message
+        for phrase in new_booking_phrases
+    )
+
 def create_confirmed_appointment_from_state(
     state: AppointmentAgentState,
 ) -> dict[str, object]:
@@ -1113,6 +1259,28 @@ def detect_intent(
 
     user_message = get_latest_user_message(state).lower()
 
+    if is_human_handoff_message(user_message):
+        return {
+            "intent": "general_question",
+            "next_question": (
+                "I can hand this over to a human staff member. "
+                "Please contact the front desk or clinic staff to "
+                "continue this request."
+            ),
+            "booking_summary": None,
+            "confirmation_status": "not_requested",
+        }
+
+    if is_graceful_exit_message(user_message):
+        return {
+            "intent": "general_question",
+            "next_question": format_graceful_exit_response(
+                user_message,
+            ),
+            "booking_summary": None,
+            "confirmation_status": "not_requested",
+        }
+
     if (
         state.get("appointment_id") is not None
         and is_thank_you_message(user_message)
@@ -1142,6 +1310,21 @@ def detect_intent(
                 "confirmation_status": "rejected",
             }
 
+    if (
+        state.get("intent") == "reschedule_appointment"
+        and is_date_correction_message(user_message)
+    ):
+        return {
+            "intent": "reschedule_appointment",
+            "requested_date": None,
+            "available_slots": None,
+            "slot_id": None,
+            "selected_slot_summary": None,
+            "booking_summary": None,
+            "confirmation_status": "not_requested",
+            "next_question": None,
+        }
+
     if any(
         keyword in user_message
         for keyword in (
@@ -1153,6 +1336,7 @@ def detect_intent(
     ):
         return {
             "intent": "reschedule_appointment",
+            "requested_date": None,
             "slot_id": None,
             "selected_slot_summary": None,
             "booking_summary": None,
@@ -1170,6 +1354,30 @@ def detect_intent(
     ):
         return {
             "intent": "cancel_appointment",
+        }
+
+    if state.get("intent") == "reschedule_appointment":
+        if is_explicit_new_booking_message(user_message):
+            return {
+                "intent": "book_appointment",
+                "service_id": None,
+                "service_name": None,
+                "staff_id": None,
+                "staff_name": None,
+                "requested_date": None,
+                "available_slots": None,
+                "selected_slot_summary": None,
+                "booking_summary": None,
+                "slot_id": None,
+                "appointment_id": None,
+                "appointment_reference_number": None,
+                "missing_fields": [],
+                "next_question": None,
+                "confirmation_status": "not_requested",
+            }
+
+        return {
+            "intent": "reschedule_appointment",
         }
 
     is_new_booking_request = any(
@@ -1401,7 +1609,10 @@ def extract_details(
             selected_slot,
         )
 
-        if state.get("confirmation_status") == "pending":
+        if (
+            state.get("confirmation_status") == "pending"
+            and state.get("intent") == "book_appointment"
+        ):
             extracted["confirmation_status"] = "not_requested"
             extracted["booking_summary"] = None
             extracted["appointment_id"] = None
@@ -1435,6 +1646,33 @@ def extract_details(
         if match is not None:
             extracted[field_name] = int(match.group(1))
 
+    if (
+        state.get("intent") == "reschedule_appointment"
+        and state.get("appointment_id") is None
+    ):
+        numeric_id_match = re.fullmatch(
+            r"\s*(\d+)\s*",
+            user_message,
+        )
+
+        if numeric_id_match is not None:
+            extracted["appointment_id"] = int(
+                numeric_id_match.group(1),
+            )
+
+    if state.get("intent") == "reschedule_appointment":
+        reference_number = extract_appointment_reference(
+            user_message,
+        )
+
+        if reference_number is not None:
+            appointment_details = get_appointment_by_reference(
+                reference_number,
+            )
+
+            if appointment_details is not None:
+                extracted.update(appointment_details)
+
     parsed_requested_date = None
 
     if selected_slot is None:
@@ -1459,6 +1697,7 @@ def extract_details(
 
     if (
         state.get("confirmation_status") == "pending"
+        and state.get("intent") == "book_appointment"
         and selected_slot is None
         and is_time_correction_message(user_message)
     ):
@@ -1846,6 +2085,24 @@ def determine_next_question(
     intent = state.get("intent")
     next_question: str | None = None
 
+    user_message = get_latest_user_message(state)
+
+    if is_human_handoff_message(user_message):
+        return {
+            "next_question": (
+                "I can hand this over to a human staff member. "
+                "Please contact the front desk or clinic staff to "
+                "continue this request."
+            ),
+        }
+
+    if is_graceful_exit_message(user_message):
+        return {
+            "next_question": format_graceful_exit_response(
+                user_message,
+            ),
+        }
+
     if (
         state.get("appointment_id") is not None
         and is_thank_you_message(get_latest_user_message(state))
@@ -1862,6 +2119,17 @@ def determine_next_question(
     if (
         intent == "book_appointment"
         and state.get("appointment_id") is not None
+    ):
+        return {
+            "next_question": state.get("next_question"),
+        }
+
+    if (
+        intent == "reschedule_appointment"
+        and state.get("confirmation_status") in {
+            "confirmed",
+            "rejected",
+        }
     ):
         return {
             "next_question": state.get("next_question"),
