@@ -3,6 +3,8 @@ from datetime import date, datetime, timedelta
 from typing import Annotated, Literal, TypedDict
 from uuid import uuid4
 
+
+
 from langchain_core.messages import (
     AIMessage as LangChainAIMessage,
     AnyMessage,
@@ -44,6 +46,7 @@ from app.models import (
     Staff,
 )
 from app.schemas import AppointmentCreate
+from app.ai.nlu import classify_message
 
 READ_ONLY_TOOLS = [
     list_available_services,
@@ -3019,6 +3022,21 @@ def determine_next_question(
             "next_question": (
                 "Please type a message so I can help with your "
                 "appointment."
+            ),
+        }
+
+    nlu_result = classify_message(user_message)
+
+    if nlu_result.intent == "ask_notification_capability":
+        return {
+            "intent": "general_question",
+            "next_question": (
+                "Appointment reminders and notifications are not enabled "
+                "in this demo yet.\n"
+                "Right now I can help you book, reschedule, cancel, check "
+                "availability, and view appointments.\n"
+                "Reminders can be added later using background jobs, SMS, "
+                "email, or calls."
             ),
         }
 
