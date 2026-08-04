@@ -227,6 +227,150 @@ def is_payment_methods_question(text: str) -> bool:
     ]
 
     return any(phrase in text for phrase in payment_phrases)
+def is_natural_booking_request(text: str) -> bool:
+    booking_need_phrases = [
+        "i need",
+        "need",
+        "i want",
+        "want",
+        "can i get",
+        "can i make",
+        "can i schedule",
+        "can you schedule",
+        "i would like",
+        "looking for",
+    ]
+
+    service_words = [
+        "dentist",
+        "dental",
+        "tooth",
+        "teeth",
+        "doctor",
+        "consultation",
+        "physio",
+        "physiotherapy",
+        "skin",
+        "dermatology",
+        "appointment",
+        "slot",
+    ]
+
+    question_only_phrases = [
+        "do you have",
+        "do you offer",
+        "do you provide",
+        "how much",
+        "price",
+        "cost",
+        "what services",
+        "which services",
+        "will you notify",
+        "notify me",
+        "reminder",
+        "insurance",
+        "payment",
+        "location",
+        "opening hours",
+    ]
+
+    if any(phrase in text for phrase in question_only_phrases):
+        return False
+
+    blocked_action_phrases = [
+        "reschedule",
+        "cancel",
+        "move my appointment",
+        "move appointment",
+        "change my appointment",
+        "change appointment",
+        "change the date",
+        "change the time",
+        "change my slot",
+        "different date",
+        "different time",
+        "i don't want",
+        "i dont want",
+        "i do not want",
+        "i can't come",
+        "i cant come",
+        "not coming",
+    ]
+
+    if any(phrase in text for phrase in blocked_action_phrases):
+        return False
+
+    return any(phrase in text for phrase in booking_need_phrases) and any(
+        word in text for word in service_words
+    )
+
+
+def is_natural_reschedule_request(text: str) -> bool:
+    reschedule_phrases = [
+        "reschedule",
+        "reschedule my appointment",
+        "need to reschedule",
+        "i need to reschedule",
+        "want to reschedule",
+        "i want to reschedule",
+        "move my appointment",
+        "move appointment",
+        "move it",
+        "change my appointment",
+        "change appointment",
+        "change the date",
+        "change the time",
+        "change my slot",
+        "change slot",
+        "move my slot",
+        "shift my appointment",
+        "shift appointment",
+        "can i move",
+        "can i change",
+        "another time",
+        "different time",
+        "different date",
+    ]
+
+    booked_context_words = [
+        "appointment",
+        "slot",
+        "booking",
+        "it",
+        "time",
+        "date",
+    ]
+
+    return any(phrase in text for phrase in reschedule_phrases) and any(
+        word in text for word in booked_context_words
+    )
+
+
+def is_natural_cancellation_request(text: str) -> bool:
+    cancellation_phrases = [
+        "i don't want my appointment",
+        "i dont want my appointment",
+        "i do not want my appointment",
+        "i don't need my appointment",
+        "i dont need my appointment",
+        "i do not need my appointment",
+        "remove my appointment",
+        "delete my appointment",
+        "drop my appointment",
+        "stop my appointment",
+        "i cannot come",
+        "i can't come",
+        "i cant come",
+        "i will not come",
+        "i won't come",
+        "i wont come",
+        "unable to attend",
+        "not coming",
+    ]
+
+    return any(phrase in text for phrase in cancellation_phrases)
+
+
 
 def classify_message(message: str) -> NLUResult:
     text = normalize_message(message)
@@ -286,6 +430,28 @@ def classify_message(message: str) -> NLUResult:
             intent="ask_payment_methods",
             confidence=0.92,
             should_start_booking=False,
+        )
+
+
+    if is_natural_cancellation_request(text):
+        return NLUResult(
+            intent="cancel_appointment",
+            confidence=0.88,
+            should_start_booking=False,
+        )
+
+    if is_natural_reschedule_request(text):
+        return NLUResult(
+            intent="reschedule_appointment",
+            confidence=0.88,
+            should_start_booking=False,
+        )
+
+    if is_natural_booking_request(text):
+        return NLUResult(
+            intent="book_appointment",
+            confidence=0.86,
+            should_start_booking=True,
         )
     if is_service_availability_question(text):
         return NLUResult(

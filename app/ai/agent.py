@@ -1880,6 +1880,26 @@ def detect_intent(
 
     user_message = get_latest_user_message(state).lower()
 
+    nlu_result = classify_message(user_message)
+
+    active_transaction_intent = state.get("intent") in {
+        "book_appointment",
+        "reschedule_appointment",
+        "cancel_appointment",
+    }
+
+    if (
+        not active_transaction_intent
+        and nlu_result.intent in {
+            "book_appointment",
+            "reschedule_appointment",
+            "cancel_appointment",
+        }
+    ):
+        return {
+            "intent": nlu_result.intent,
+        }
+
     if is_human_handoff_message(user_message):
         return {
             "intent": "general_question",

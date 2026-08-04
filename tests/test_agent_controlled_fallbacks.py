@@ -519,3 +519,67 @@ def test_payment_methods_question_does_not_start_booking_flow():
     assert "I don't have that information available yet" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
     assert result["intent"] == "general_question"
+
+def test_natural_dentist_need_starts_booking_flow():
+    from app.ai.agent import determine_next_question, detect_intent
+
+    state = {
+        "messages": [
+            HumanMessage(content="I need a dentist tomorrow")
+        ],
+        "available_services": [
+            {
+                "service_id": 1,
+                "name": "Dental care",
+                "description": "Dental checkups",
+                "duration_minutes": 30,
+                "price": 3500,
+            }
+        ],
+    }
+
+    intent_result = detect_intent(state)
+    state.update(intent_result)
+
+    result = determine_next_question(state)
+
+    assert state["intent"] == "book_appointment"
+    assert "Which service would you like" in result["next_question"]
+
+
+def test_move_my_appointment_starts_reschedule_flow():
+    from app.ai.agent import determine_next_question, detect_intent
+
+    state = {
+        "messages": [
+            HumanMessage(content="can I move my appointment?")
+        ],
+    }
+
+    intent_result = detect_intent(state)
+    state.update(intent_result)
+
+    result = determine_next_question(state)
+
+    assert state["intent"] == "reschedule_appointment"
+    assert "help reschedule" in result["next_question"]
+    assert "appointment ID or reference number" in result["next_question"]
+
+
+def test_dont_want_appointment_starts_cancel_flow():
+    from app.ai.agent import determine_next_question, detect_intent
+
+    state = {
+        "messages": [
+            HumanMessage(content="I don't want my appointment anymore")
+        ],
+    }
+
+    intent_result = detect_intent(state)
+    state.update(intent_result)
+
+    result = determine_next_question(state)
+
+    assert state["intent"] == "cancel_appointment"
+    assert "help cancel an appointment" in result["next_question"]
+    assert "phone number or appointment reference" in result["next_question"]

@@ -28,10 +28,11 @@ def test_blank_message():
     assert result.intent == "blank"
 
 
-def test_normal_booking_message_is_not_notification_question():
+def test_normal_booking_message_is_booking_intent():
     result = classify_message("i want to book an appointment")
 
-    assert result.intent == "unknown"
+    assert result.intent == "book_appointment"
+    assert result.should_start_booking is True
 
 
 def test_dental_question_is_service_availability_question():
@@ -154,4 +155,52 @@ def test_card_payment_question_is_payment_intent():
     result = classify_message("do you accept card payment?")
 
     assert result.intent == "ask_payment_methods"
+    assert result.should_start_booking is False
+
+def test_natural_dentist_need_is_booking_intent():
+    result = classify_message("I need a dentist tomorrow")
+
+    assert result.intent == "book_appointment"
+    assert result.should_start_booking is True
+
+
+def test_natural_tooth_doctor_request_is_booking_intent():
+    result = classify_message("i need tooth doctor day after tomorrow morning")
+
+    assert result.intent == "book_appointment"
+    assert result.should_start_booking is True
+
+
+def test_natural_consultation_request_is_booking_intent():
+    result = classify_message("can I get a consultation next Monday?")
+
+    assert result.intent == "book_appointment"
+    assert result.should_start_booking is True
+
+
+def test_move_my_appointment_is_reschedule_intent():
+    result = classify_message("can I move my appointment?")
+
+    assert result.intent == "reschedule_appointment"
+    assert result.should_start_booking is False
+
+
+def test_change_my_slot_is_reschedule_intent():
+    result = classify_message("I want to change my slot")
+
+    assert result.intent == "reschedule_appointment"
+    assert result.should_start_booking is False
+
+
+def test_dont_want_my_appointment_is_cancel_intent():
+    result = classify_message("I don't want my appointment anymore")
+
+    assert result.intent == "cancel_appointment"
+    assert result.should_start_booking is False
+
+
+def test_cannot_come_is_cancel_intent():
+    result = classify_message("I can't come for my appointment")
+
+    assert result.intent == "cancel_appointment"
     assert result.should_start_booking is False
