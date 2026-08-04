@@ -192,9 +192,9 @@ def test_reschedule_asks_for_appointment_id() -> None:
     )
 
     assert result["next_question"] == (
-        "Sure, I can help reschedule an appointment. "
-        "What is your appointment ID?"
-    )
+    "Sure, I can help reschedule an appointment. "
+    "What is your appointment ID or reference number?"
+)
 
 
 def test_reschedule_asks_for_new_slot() -> None:
@@ -206,8 +206,8 @@ def test_reschedule_asks_for_new_slot() -> None:
     )
 
     assert result["next_question"] == (
-        "Which new appointment slot would you prefer?"
-    )
+    "Which date would you like to move this appointment to?"
+)
 
 
 def test_general_question_has_no_controlled_question() -> None:
