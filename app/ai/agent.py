@@ -17,7 +17,9 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from app.ai.model import get_chat_model
 from app.appointment_services import (
     AppointmentConflictError,
+    AppointmentNotFoundError,
     InvalidAppointmentError,
+    cancel_appointment,
     create_appointment,
     reschedule_appointment,
 )
@@ -36,6 +38,7 @@ from app.models import (
     AIEventType,
     AIMessageRole,
     Appointment,
+    AppointmentStatus,
     Customer,
     Service,
     Staff,
@@ -72,6 +75,7 @@ AppointmentIntent = Literal[
     "cancel_appointment",
     "reschedule_appointment",
     "check_availability",
+    "view_appointments",
     "list_services",
     "general_question",
 ]
@@ -95,6 +99,7 @@ class AppointmentAgentState(TypedDict, total=False):
     customer_id: int | None
     customer_name: str | None
     customer_phone_number: str | None
+    customer_phone_invalid: bool
     service_id: int | None
     service_name: str | None
     staff_id: int | None
@@ -103,13 +108,18 @@ class AppointmentAgentState(TypedDict, total=False):
 
     available_services: list[dict[str, object]] | None
     available_slots: list[dict[str, object]] | None
+    upcoming_alternative_slots: list[dict[str, object]] | None
     selected_slot_summary: str | None
     booking_summary: str | None
     slot_id: int | None
 
     appointment_id: int | None
     appointment_reference_number: str | None
+    appointment_status: str | None
+    current_slot_id: int | None
     cancellation_reason: str | None
+
+    slot_selection_error: str | None
 
     missing_fields: list[str]
     next_question: str | None
@@ -180,7 +190,7 @@ def extract_appointment_reference(
 def get_appointment_by_reference(
     reference_number: str,
 ) -> dict[str, object] | None:
-    """Load the appointment details needed by the reschedule flow."""
+    """Load appointment details by public reference number."""
 
     database = SessionLocal()
 
@@ -196,16 +206,111 @@ def get_appointment_by_reference(
         if appointment is None:
             return None
 
-        return {
-            "appointment_id": appointment.id,
-            "appointment_reference_number": (
-                appointment.reference_number
-            ),
-            "service_id": appointment.service_id,
-            "service_name": appointment.service.name,
-            "staff_id": appointment.staff_id,
-            "staff_name": appointment.staff.full_name,
-        }
+        return appointment_to_conversation_details(appointment)
+
+    finally:
+        database.close()
+
+
+def appointment_to_conversation_details(
+    appointment: Appointment,
+) -> dict[str, object]:
+    """Convert an appointment model into safe display/state values."""
+
+    status = appointment.status
+
+    return {
+        "appointment_id": appointment.id,
+        "appointment_reference_number": appointment.reference_number,
+        "appointment_status": (
+            status.value
+            if hasattr(status, "value")
+            else str(status)
+        ),
+        "customer_id": appointment.customer_id,
+        "customer_phone_number": (
+            appointment.customer.phone_number
+            if appointment.customer is not None
+            else None
+        ),
+        "service_id": appointment.service_id,
+        "service_name": (
+            appointment.service.name
+            if appointment.service is not None
+            else "Appointment"
+        ),
+        "staff_id": appointment.staff_id,
+        "staff_name": (
+            appointment.staff.full_name
+            if appointment.staff is not None
+            else "Selected staff"
+        ),
+        "current_slot_id": appointment.slot_id,
+        "start_datetime": appointment.start_datetime.isoformat(),
+        "end_datetime": appointment.end_datetime.isoformat(),
+    }
+
+
+def get_appointment_by_id_for_conversation(
+    appointment_id: int,
+) -> dict[str, object] | None:
+    """Load appointment display details by internal ID."""
+
+    database = SessionLocal()
+
+    try:
+        appointment = database.get(Appointment, appointment_id)
+
+        if appointment is None:
+            return None
+
+        return appointment_to_conversation_details(appointment)
+
+    finally:
+        database.close()
+
+
+def get_upcoming_appointments_for_customer(
+    customer_id: int | None = None,
+    phone_number: str | None = None,
+) -> list[dict[str, object]]:
+    """Load confirmed future appointments for a known customer."""
+
+    database = SessionLocal()
+
+    try:
+        resolved_customer_id = customer_id
+
+        if resolved_customer_id is None and phone_number is not None:
+            customer = (
+                database.query(Customer)
+                .filter(Customer.phone_number == phone_number)
+                .first()
+            )
+
+            if customer is None:
+                return []
+
+            resolved_customer_id = int(customer.id)
+
+        if resolved_customer_id is None:
+            return []
+
+        appointments = (
+            database.query(Appointment)
+            .filter(
+                Appointment.customer_id == resolved_customer_id,
+                Appointment.start_datetime >= datetime.now(),
+                Appointment.status == AppointmentStatus.CONFIRMED,
+            )
+            .order_by(Appointment.start_datetime)
+            .all()
+        )
+
+        return [
+            appointment_to_conversation_details(appointment)
+            for appointment in appointments
+        ]
 
     finally:
         database.close()
@@ -628,6 +733,70 @@ def format_upcoming_available_slots(
     return "\n".join(lines)
 
 
+def format_appointment_details(
+    appointment: dict[str, object],
+    index: int | None = None,
+) -> str:
+    """Format one appointment for listing, status, or cancellation."""
+
+    prefix = f"{index}. " if index is not None else ""
+    status = str(appointment.get("appointment_status") or "UNKNOWN")
+    start_datetime = appointment.get("start_datetime")
+    end_datetime = appointment.get("end_datetime")
+    parsed_start = parse_datetime(start_datetime)
+    appointment_date = (
+        parsed_start.date().isoformat()
+        if parsed_start is not None
+        else None
+    )
+
+    return (
+        f"{prefix}Reference: "
+        f"{appointment.get('appointment_reference_number')}\n"
+        f"Service: {appointment.get('service_name') or 'Appointment'}\n"
+        f"Doctor/Staff: "
+        f"{appointment.get('staff_name') or 'Selected staff'}\n"
+        f"Date: {format_date(appointment_date)}\n"
+        f"Time: {format_time(start_datetime)} – "
+        f"{format_time(end_datetime)}\n"
+        f"Status: {status}"
+    )
+
+
+def format_appointment_list(
+    appointments: list[dict[str, object]],
+) -> str:
+    """Format upcoming appointments as a controlled response."""
+
+    if not appointments:
+        return (
+            "I couldn't find any upcoming appointments for those "
+            "details."
+        )
+
+    formatted_appointments = [
+        format_appointment_details(appointment, index)
+        for index, appointment in enumerate(appointments, start=1)
+    ]
+
+    return (
+        "Here are your upcoming appointments:\n\n"
+        + "\n\n".join(formatted_appointments)
+    )
+
+
+def format_cancellation_confirmation_summary(
+    appointment: dict[str, object],
+) -> str:
+    """Format a pending cancellation without mutating the database."""
+
+    return (
+        "Please confirm the appointment you want to cancel:\n\n"
+        + format_appointment_details(appointment)
+        + "\n\nShould I cancel this appointment?"
+    )
+
+
 def find_slot_from_message(
     user_message: str,
     available_slots: list[dict[str, object]] | None,
@@ -640,7 +809,7 @@ def find_slot_from_message(
     normalized_message = normalize_text(user_message)
 
     slot_id_match = re.search(
-        r"\bslot(?:\s+id)?\s*(?:is|=|:)?\s*(\d+)\b",
+        r"\bslot\s+id\s*(?:is|=|:)?\s*(\d+)\b",
         user_message,
         flags=re.IGNORECASE,
     )
@@ -651,6 +820,37 @@ def find_slot_from_message(
         for slot in available_slots:
             if slot.get("slot_id") == selected_slot_id:
                 return slot
+
+    option_match = re.search(
+        r"\b(?:option|slot)\s*(\d+)\b",
+        normalized_message,
+    )
+
+    if option_match is not None:
+        option_number = int(option_match.group(1))
+
+        if 1 <= option_number <= len(available_slots):
+            return available_slots[option_number - 1]
+
+    single_slot_phrases = (
+        "this slot",
+        "this one",
+        "that one",
+        "take this",
+        "choose this",
+        "select this",
+        "yes this slot",
+        "book this slot",
+    )
+
+    if (
+        len(available_slots) == 1
+        and any(
+            phrase in normalized_message
+            for phrase in single_slot_phrases
+        )
+    ):
+        return available_slots[0]
 
     ordinal_choices = {
         "first": 1,
@@ -668,7 +868,7 @@ def find_slot_from_message(
     }
 
     for word, option_number in ordinal_choices.items():
-        if word in normalized_message:
+        if re.search(rf"\b{re.escape(word)}\b", normalized_message):
             if 1 <= option_number <= len(available_slots):
                 return available_slots[option_number - 1]
 
@@ -679,10 +879,6 @@ def find_slot_from_message(
 
     if bare_number_match is not None:
         number = int(bare_number_match.group(1))
-
-        for slot in available_slots:
-            if slot.get("slot_id") == number:
-                return slot
 
         if 1 <= number <= len(available_slots):
             return available_slots[number - 1]
@@ -707,38 +903,171 @@ def find_slot_from_message(
             f"{hour_24}",
             f"{hour_12}",
             f"{hour_12} {start_datetime.strftime('%p').lower()}",
+            f"{hour_12}{start_datetime.strftime('%p').lower()}",
             f"{hour_12}:{minute}",
             f"{hour_12}:{minute} {start_datetime.strftime('%p').lower()}",
+            f"{hour_12}:{minute}{start_datetime.strftime('%p').lower()}",
         }
 
         if any(
-            time_text in normalized_message
+            re.search(
+                rf"\b{re.escape(time_text)}\b",
+                normalized_message,
+            )
             for time_text in possible_times
         ):
             return slot
 
     return None
 
-def extract_phone_number(
+
+def get_slot_selection_error(
+    user_message: str,
+    available_slots: list[dict[str, object]] | None,
+) -> str | None:
+    """Return a controlled clarification for an invalid slot choice."""
+
+    if not available_slots:
+        return None
+
+    normalized_message = normalize_text(user_message)
+    ambiguous_phrases = (
+        "this slot",
+        "this one",
+        "that one",
+        "take this",
+        "choose this",
+        "select this",
+    )
+
+    if (
+        len(available_slots) > 1
+        and any(
+            phrase in normalized_message
+            for phrase in ambiguous_phrases
+        )
+        and re.search(r"\b\d+\b", normalized_message) is None
+    ):
+        return (
+            "Which slot do you mean? Please choose option 1, 2, "
+            "or a time."
+        )
+
+    option_match = re.search(
+        r"\b(?:option|slot)\s*(\d+)\b",
+        normalized_message,
+    )
+    bare_number_match = re.fullmatch(r"\s*(\d+)\s*", user_message)
+    selected_number = None
+
+    if option_match is not None:
+        selected_number = int(option_match.group(1))
+    elif bare_number_match is not None:
+        selected_number = int(bare_number_match.group(1))
+
+    if (
+        selected_number is not None
+        and not 1 <= selected_number <= len(available_slots)
+    ):
+        option_range = (
+            "option 1"
+            if len(available_slots) == 1
+            else (
+                "options 1 and 2"
+                if len(available_slots) == 2
+                else f"options 1 to {len(available_slots)}"
+            )
+        )
+
+        return (
+            f"I only have {option_range} available. Would you like "
+            "one of those, or a different date?"
+        )
+
+    return None
+
+
+def extract_phone_candidate(
     user_message: str,
 ) -> str | None:
-    """Extract a likely phone number from a customer message."""
+    """Extract a phone-like value, including invalid lengths."""
 
     phone_match = re.search(
-        r"\b(?:\+?\d[\d\s-]{6,}\d)\b",
+        r"(?<![A-Za-z0-9])\+?\d[\d\s()\-]{6,}\d(?![A-Za-z0-9])",
         user_message,
     )
 
     if phone_match is None:
         return None
 
-    phone_number = re.sub(
-        r"[\s-]+",
+    candidate = phone_match.group(0).strip()
+    digit_count = len(re.sub(r"\D", "", candidate))
+
+    if digit_count < 9:
+        return None
+
+    return candidate
+
+
+def normalize_sri_lankan_phone_number(
+    phone_number: str,
+) -> str | None:
+    """Normalize a valid Sri Lankan mobile number to +94 format."""
+
+    if re.search(r"[A-Za-z]", phone_number):
+        return None
+
+    compact_number = re.sub(
+        r"[\s()\-]+",
         "",
-        phone_match.group(0),
+        phone_number,
     )
 
-    return phone_number
+    if compact_number.startswith("+94"):
+        local_digits = compact_number[3:]
+    elif compact_number.startswith("94"):
+        local_digits = compact_number[2:]
+    elif compact_number.startswith("0"):
+        local_digits = compact_number[1:]
+    else:
+        local_digits = compact_number
+
+    valid_mobile_prefixes = {
+        "70",
+        "71",
+        "72",
+        "75",
+        "76",
+        "77",
+        "78",
+    }
+
+    if (
+        len(local_digits) != 9
+        or not local_digits.isdigit()
+        or local_digits[:2] not in valid_mobile_prefixes
+    ):
+        return None
+
+    if compact_number.startswith("+") and not compact_number.startswith(
+        "+94",
+    ):
+        return None
+
+    return f"+94{local_digits}"
+
+
+def extract_phone_number(
+    user_message: str,
+) -> str | None:
+    """Extract and normalize a valid Sri Lankan mobile number."""
+
+    phone_candidate = extract_phone_candidate(user_message)
+
+    if phone_candidate is None:
+        return None
+
+    return normalize_sri_lankan_phone_number(phone_candidate)
 
 
 def extract_customer_name(
@@ -748,6 +1077,25 @@ def extract_customer_name(
     """Extract a simple customer name from a message."""
 
     cleaned_message = user_message.strip()
+
+    stated_name_match = re.search(
+        r"\b(?:my\s+name\s+is|name\s+is|i\s+am|i['’]m|this\s+is)"
+        r"\s+([A-Za-z][A-Za-z .'-]{1,80}?)"
+        r"(?=\s*[,;]|\s+(?:and\s+)?(?:my\s+)?(?:phone|mobile|"
+        r"contact|number)\b|\s+\+?\d|$)",
+        cleaned_message,
+        flags=re.IGNORECASE,
+    )
+
+    if stated_name_match is not None:
+        stated_name = re.sub(
+            r"\s+",
+            " ",
+            stated_name_match.group(1),
+        ).strip(" .,-")
+
+        if len(stated_name) >= 2:
+            return stated_name.title()
 
     if phone_number is not None:
         cleaned_message = cleaned_message.replace(
@@ -801,12 +1149,19 @@ def get_or_create_customer_from_details(
 ) -> dict[str, object]:
     """Find an existing customer by phone or create a new one."""
 
+    normalized_phone_number = normalize_sri_lankan_phone_number(
+        phone_number,
+    )
+
+    if normalized_phone_number is None:
+        raise ValueError("A valid Sri Lankan phone number is required.")
+
     database = SessionLocal()
 
     try:
         customer = (
             database.query(Customer)
-            .filter(Customer.phone_number == phone_number)
+            .filter(Customer.phone_number == normalized_phone_number)
             .first()
         )
 
@@ -824,7 +1179,7 @@ def get_or_create_customer_from_details(
 
         customer = Customer(
             full_name=full_name,
-            phone_number=phone_number,
+            phone_number=normalized_phone_number,
             is_active=True,
         )
 
@@ -944,6 +1299,9 @@ def is_confirmation_yes_message(
 
     yes_phrases = {
         "yes",
+        "ok",
+        "okay",
+        "sure",
         "yes confirm",
         "confirm",
         "confirm it",
@@ -956,6 +1314,21 @@ def is_confirmation_yes_message(
     }
 
     return normalized_message in yes_phrases
+
+
+def is_ambiguous_confirmation_message(
+    user_message: str,
+) -> bool:
+    """Return True when confirmation wording is not decisive."""
+
+    normalized_message = normalize_text(user_message)
+
+    return normalized_message in {
+        "maybe",
+        "not sure",
+        "i guess",
+        "sure i guess",
+    }
 
 
 def is_confirmation_no_message(
@@ -974,6 +1347,8 @@ def is_confirmation_no_message(
         "cancel",
         "cancel it",
         "leave it",
+        "keep it",
+        "no wait keep it",
     }
 
     return normalized_message in no_phrases
@@ -1096,6 +1471,7 @@ def is_human_handoff_message(
     handoff_phrases = (
         "transfer to human",
         "talk to human",
+        "talk to a person",
         "speak to human",
         "front desk",
         "receptionist",
@@ -1123,6 +1499,9 @@ def is_graceful_exit_message(
         "no problem",
         "leave it",
         "cancel this request",
+        "never mind",
+        "forget it",
+        "stop",
     )
 
     return any(
@@ -1151,7 +1530,7 @@ def format_graceful_exit_response(
         )
 
     return (
-        "No problem. I'll stop this request. Let me know if you "
+        "No problem, I've stopped that request. Let me know if you "
         "need help with anything else."
     )
 
@@ -1194,6 +1573,113 @@ def is_upcoming_availability_request(
         phrase in normalized_message
         for phrase in upcoming_availability_phrases
     )
+
+
+def is_appointment_listing_request(
+    user_message: str,
+) -> bool:
+    """Return True for appointment listing or status requests."""
+
+    normalized_message = normalize_text(user_message)
+    listing_phrases = (
+        "all my appointments",
+        "tell me all my appointments",
+        "show my appointments",
+        "list my appointments",
+        "my appointments",
+        "do i have any appointments",
+        "appointment status",
+        "check my appointment",
+        "is my appointment confirmed",
+        "what appointments do i have",
+        "which appointments do i have",
+        "show my bookings",
+        "my bookings",
+    )
+
+    return any(
+        phrase in normalized_message
+        for phrase in listing_phrases
+    )
+
+
+def is_capabilities_request(user_message: str) -> bool:
+    """Return True when the user asks what the assistant can do."""
+
+    normalized_message = normalize_text(user_message)
+
+    return any(
+        phrase in normalized_message
+        for phrase in (
+            "what can you do",
+            "how can you help",
+            "help me",
+        )
+    )
+
+
+def is_greeting_or_small_talk(user_message: str) -> bool:
+    """Return True for greetings and basic assistant small talk."""
+
+    normalized_message = normalize_text(user_message)
+
+    return normalized_message in {
+        "hi",
+        "hello",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "how are you",
+        "how r u",
+    }
+
+
+def is_safe_information_request(user_message: str) -> bool:
+    """Return True for clinic facts that require verified knowledge."""
+
+    normalized_message = normalize_text(user_message)
+
+    return any(
+        phrase in normalized_message
+        for phrase in (
+            "opening hours",
+            "cancellation policy",
+            "where are you located",
+            "your location",
+            "accept insurance",
+            "insurance",
+        )
+    )
+
+
+def is_pricing_request(user_message: str) -> bool:
+    """Return True when the user asks for a service price."""
+
+    normalized_message = normalize_text(user_message)
+
+    return any(
+        phrase in normalized_message
+        for phrase in (
+            "how much",
+            "price of",
+            "cost of",
+            "price for",
+        )
+    )
+
+
+def is_likely_gibberish(user_message: str) -> bool:
+    """Detect short inputs with no recognizable language structure."""
+
+    normalized_message = normalize_text(user_message)
+
+    if not normalized_message:
+        return False
+
+    words = normalized_message.split()
+
+    return len(words) == 1 and len(words[0]) >= 8
 
 
 def find_upcoming_available_slots(
@@ -1248,6 +1734,7 @@ def create_confirmed_appointment_from_state(
         return {
             "id": appointment.id,
             "reference_number": appointment.reference_number,
+            "slot_id": appointment.slot_id,
             "start_datetime": appointment.start_datetime.isoformat(),
             "end_datetime": appointment.end_datetime.isoformat(),
         }
@@ -1272,9 +1759,33 @@ def reschedule_confirmed_appointment_from_state(
         return {
             "id": appointment.id,
             "reference_number": appointment.reference_number,
+            "slot_id": appointment.slot_id,
             "start_datetime": appointment.start_datetime.isoformat(),
             "end_datetime": appointment.end_datetime.isoformat(),
         }
+
+    finally:
+        database.close()
+
+
+def cancel_confirmed_appointment_from_state(
+    state: AppointmentAgentState,
+) -> dict[str, object]:
+    """Cancel a confirmed appointment after explicit confirmation."""
+
+    database = SessionLocal()
+
+    try:
+        appointment = cancel_appointment(
+            database=database,
+            appointment_id=int(state["appointment_id"]),
+            cancellation_reason=(
+                state.get("cancellation_reason")
+                or "Cancelled by customer through AI assistant"
+            ),
+        )
+
+        return appointment_to_conversation_details(appointment)
 
     finally:
         database.close()
@@ -1375,6 +1886,9 @@ def detect_intent(
                 "continue this request."
             ),
             "booking_summary": None,
+            "available_slots": None,
+            "slot_id": None,
+            "selected_slot_summary": None,
             "confirmation_status": "not_requested",
         }
 
@@ -1385,7 +1899,28 @@ def detect_intent(
                 user_message,
             ),
             "booking_summary": None,
+            "requested_date": None,
+            "available_slots": None,
+            "slot_id": None,
+            "selected_slot_summary": None,
             "confirmation_status": "not_requested",
+        }
+
+    if is_appointment_listing_request(user_message):
+        return {
+            "intent": "view_appointments",
+            "next_question": None,
+        }
+
+    if (
+        is_capabilities_request(user_message)
+        or is_greeting_or_small_talk(user_message)
+        or is_safe_information_request(user_message)
+        or is_pricing_request(user_message)
+    ):
+        return {
+            "intent": "general_question",
+            "next_question": None,
         }
 
     if (
@@ -1404,6 +1939,7 @@ def detect_intent(
     if (
         state.get("intent") == "reschedule_appointment"
         and state.get("confirmation_status") == "pending"
+        and state.get("booking_summary") is not None
     ):
         if is_confirmation_yes_message(user_message):
             return {
@@ -1414,6 +1950,23 @@ def detect_intent(
         if is_confirmation_no_message(user_message):
             return {
                 "intent": "reschedule_appointment",
+                "confirmation_status": "rejected",
+            }
+
+    if (
+        state.get("intent") == "cancel_appointment"
+        and state.get("confirmation_status") == "pending"
+        and state.get("booking_summary") is not None
+    ):
+        if is_confirmation_yes_message(user_message):
+            return {
+                "intent": "cancel_appointment",
+                "confirmation_status": "confirmed",
+            }
+
+        if is_confirmation_no_message(user_message):
+            return {
+                "intent": "cancel_appointment",
                 "confirmation_status": "rejected",
             }
 
@@ -1432,15 +1985,26 @@ def detect_intent(
             "next_question": None,
         }
 
-    if any(
+    is_reschedule_request = any(
         keyword in user_message
         for keyword in (
             "reschedule",
+            "reshedule",
             "move my appointment",
             "change my appointment",
             "change the appointment",
         )
+    )
+
+    if (
+        state.get("intent") == "reschedule_appointment"
+        and is_reschedule_request
     ):
+        return {
+            "intent": "reschedule_appointment",
+        }
+
+    if is_reschedule_request:
         return {
             "intent": "reschedule_appointment",
             "requested_date": None,
@@ -1461,6 +2025,9 @@ def detect_intent(
     ):
         return {
             "intent": "cancel_appointment",
+            "booking_summary": None,
+            "confirmation_status": "not_requested",
+            "next_question": None,
         }
 
     if state.get("intent") == "reschedule_appointment":
@@ -1533,6 +2100,7 @@ def detect_intent(
     if (
         state.get("confirmation_status") == "pending"
         and state.get("appointment_id") is None
+        and state.get("booking_summary") is not None
     ):
         if is_time_correction_message(user_message):
             return {
@@ -1639,6 +2207,7 @@ def detect_intent(
             "available slots",
             "available time",
             "availability",
+            "avalable",
             "free slot",
             "what time",
             "which time",
@@ -1663,6 +2232,9 @@ def detect_intent(
         for keyword in (
             "book",
             "appointment",
+            "appoinment",
+            "appointmentt",
+            "appoinmtent",
             "make an appointment",
             "need an appointment",
             "need a",
@@ -1681,6 +2253,7 @@ def detect_intent(
             "cancel_appointment",
             "reschedule_appointment",
             "check_availability",
+            "view_appointments",
         }:
             intent = existing_intent
         else:
@@ -1699,10 +2272,27 @@ def extract_details(
     user_message = get_latest_user_message(state)
     extracted: AppointmentAgentState = {}
 
-    selected_slot = find_slot_from_message(
-        user_message=user_message,
-        available_slots=state.get("available_slots"),
+    phone_candidate_for_turn = extract_phone_candidate(user_message)
+    selected_slot = (
+        None
+        if phone_candidate_for_turn is not None
+        else find_slot_from_message(
+            user_message=user_message,
+            available_slots=state.get("available_slots"),
+        )
     )
+
+    slot_selection_error = (
+        None
+        if phone_candidate_for_turn is not None
+        else get_slot_selection_error(
+            user_message=user_message,
+            available_slots=state.get("available_slots"),
+        )
+    )
+
+    if slot_selection_error is not None:
+        extracted["slot_selection_error"] = slot_selection_error
 
     if selected_slot is not None:
         extracted["slot_id"] = int(selected_slot["slot_id"])
@@ -1715,6 +2305,10 @@ def extract_details(
         extracted["selected_slot_summary"] = format_slot_summary(
             selected_slot,
         )
+        extracted["upcoming_alternative_slots"] = None
+
+        if state.get("slot_selection_error") is not None:
+            extracted["slot_selection_error"] = None
 
         selected_start = parse_datetime(
             selected_slot.get("start_datetime"),
@@ -1753,6 +2347,9 @@ def extract_details(
     }
 
     for field_name, pattern in id_patterns.items():
+        if field_name == "slot_id" and state.get("available_slots"):
+            continue
+
         match = re.search(
             pattern,
             user_message,
@@ -1763,7 +2360,10 @@ def extract_details(
             extracted[field_name] = int(match.group(1))
 
     if (
-        state.get("intent") == "reschedule_appointment"
+        state.get("intent") in {
+            "reschedule_appointment",
+            "cancel_appointment",
+        }
         and state.get("appointment_id") is None
     ):
         numeric_id_match = re.fullmatch(
@@ -1776,12 +2376,19 @@ def extract_details(
                 numeric_id_match.group(1),
             )
 
-    if state.get("intent") == "reschedule_appointment":
+    if state.get("intent") in {
+        "reschedule_appointment",
+        "cancel_appointment",
+        "view_appointments",
+    }:
         reference_number = extract_appointment_reference(
             user_message,
         )
 
         if reference_number is not None:
+            extracted["appointment_reference_number"] = (
+                reference_number
+            )
             appointment_details = get_appointment_by_reference(
                 reference_number,
             )
@@ -1804,6 +2411,7 @@ def extract_details(
             and parsed_requested_date != previous_date
         ):
             extracted["available_slots"] = None
+            extracted["upcoming_alternative_slots"] = None
             extracted["slot_id"] = None
             extracted["selected_slot_summary"] = None
             extracted["booking_summary"] = None
@@ -1824,15 +2432,46 @@ def extract_details(
         extracted["appointment_id"] = None
         extracted["appointment_reference_number"] = None
 
-    if state.get("intent") == "book_appointment":
-        phone_number = extract_phone_number(user_message)
+    if state.get("intent") in {
+        "book_appointment",
+        "cancel_appointment",
+        "view_appointments",
+    }:
+        phone_candidate = extract_phone_candidate(user_message)
 
-        if phone_number is not None:
-            extracted["customer_phone_number"] = phone_number
+        if phone_candidate is not None:
+            phone_number = normalize_sri_lankan_phone_number(
+                phone_candidate,
+            )
 
+            if phone_number is None:
+                extracted["customer_phone_invalid"] = True
+                extracted["customer_phone_number"] = None
+            else:
+                extracted["customer_phone_invalid"] = False
+                extracted["customer_phone_number"] = phone_number
+
+            if state.get("intent") == "book_appointment":
+                customer_name = extract_customer_name(
+                    user_message=user_message,
+                    phone_number=phone_candidate,
+                )
+
+                if customer_name is not None:
+                    extracted["customer_name"] = customer_name
+
+        elif (
+            state.get("intent") == "book_appointment"
+            and state.get("slot_id") is not None
+            and re.search(
+                r"\b(?:my\s+name\s+is|name\s+is|i\s+am|this\s+is)\b",
+                user_message,
+                flags=re.IGNORECASE,
+            )
+        ):
             customer_name = extract_customer_name(
                 user_message=user_message,
-                phone_number=phone_number,
+                phone_number=None,
             )
 
             if customer_name is not None:
@@ -1893,10 +2532,19 @@ def resolve_named_entities(
 
         if previous_service_id != new_service_id:
             updates["available_slots"] = None
+            updates["upcoming_alternative_slots"] = None
             updates["slot_id"] = None
             updates["selected_slot_summary"] = None
             updates["staff_id"] = None
             updates["staff_name"] = None
+            updates["booking_summary"] = None
+            updates["confirmation_status"] = "not_requested"
+
+        if (
+            previous_service_id is not None
+            and previous_service_id != new_service_id
+        ):
+            updates["requested_date"] = None
 
     elif (
         state.get("service_id") is not None
@@ -1961,39 +2609,117 @@ def resolve_customer_details(
     if customer_name is None or phone_number is None:
         return {}
 
+    normalized_phone_number = normalize_sri_lankan_phone_number(
+        phone_number,
+    )
+
+    if normalized_phone_number is None:
+        return {
+            "customer_phone_number": None,
+            "customer_phone_invalid": True,
+        }
+
     customer = get_or_create_customer_from_details(
         full_name=customer_name,
-        phone_number=phone_number,
+        phone_number=normalized_phone_number,
     )
 
     return {
         "customer_id": int(customer["id"]),
         "customer_name": str(customer["full_name"]),
-        "customer_phone_number": str(customer["phone_number"]),
+        "customer_phone_number": (
+            normalize_sri_lankan_phone_number(
+                str(customer["phone_number"]),
+            )
+            or normalized_phone_number
+        ),
+        "customer_phone_invalid": False,
     }
 
 def confirm_or_reject_booking(
     state: AppointmentAgentState,
 ) -> AppointmentAgentState:
-    """Create or reschedule an appointment after user confirmation."""
+    """Execute a booking, cancellation, or reschedule after confirmation."""
 
-    if state.get("intent") == "reschedule_appointment":
+    intent = state.get("intent")
+
+    if intent == "cancel_appointment":
         if state.get("confirmation_status") == "rejected":
             return {
                 "next_question": (
-                    "No problem. I have not changed this appointment."
+                    "No problem, I've kept your appointment as it is."
                 ),
                 "booking_summary": None,
             }
 
-        if state.get("confirmation_status") != "confirmed":
+        if (
+            state.get("confirmation_status") != "confirmed"
+            or state.get("booking_summary") is None
+        ):
             return {}
 
-        required_fields = [
-            "appointment_id",
-            "slot_id",
-        ]
+        if state.get("appointment_id") is None:
+            return {
+                "confirmation_status": "not_requested",
+                "next_question": (
+                    "Sure, I can help cancel an appointment. Please "
+                    "share your phone number or appointment reference."
+                ),
+            }
 
+        try:
+            appointment = cancel_confirmed_appointment_from_state(state)
+
+        except AppointmentNotFoundError:
+            return {
+                "confirmation_status": "not_requested",
+                "next_question": (
+                    "I couldn't find an appointment with that reference. "
+                    "Please check the reference number or share your "
+                    "phone number."
+                ),
+            }
+
+        except InvalidAppointmentError as error:
+            response = (
+                "This appointment was already cancelled."
+                if "confirmed" in str(error).lower()
+                else f"I could not cancel this appointment: {error}"
+            )
+
+            return {
+                "confirmation_status": "not_requested",
+                "next_question": response,
+            }
+
+        return {
+            "appointment_status": str(
+                appointment.get("appointment_status") or "CANCELLED"
+            ),
+            "confirmation_status": "confirmed",
+            "booking_summary": None,
+            "next_question": (
+                "Your appointment has been cancelled. Reference: "
+                f"{appointment['appointment_reference_number']}."
+            ),
+        }
+
+    if intent == "reschedule_appointment":
+        if state.get("confirmation_status") == "rejected":
+            return {
+                "next_question": (
+                    "No problem. Your original appointment stays as is."
+                ),
+                "booking_summary": None,
+            }
+
+        if (
+            state.get("confirmation_status") != "confirmed"
+            or state.get("booking_summary") is None
+        ):
+            return {}
+
+        required_fields = ["appointment_id", "slot_id"]
         missing_fields = [
             field_name
             for field_name in required_fields
@@ -2006,6 +2732,19 @@ def confirm_or_reject_booking(
                 "next_question": (
                     "I still need the new appointment slot before "
                     "I can confirm the reschedule."
+                ),
+            }
+
+        if (
+            state.get("current_slot_id") is not None
+            and state.get("slot_id") == state.get("current_slot_id")
+        ):
+            return {
+                "confirmation_status": "confirmed",
+                "booking_summary": None,
+                "next_question": (
+                    "That's already your current appointment time, so "
+                    "no changes are needed."
                 ),
             }
 
@@ -2033,11 +2772,14 @@ def confirm_or_reject_booking(
             "appointment_reference_number": str(
                 appointment["reference_number"]
             ),
+            "current_slot_id": int(
+                appointment.get("slot_id") or state["slot_id"]
+            ),
             "confirmation_status": "confirmed",
             "next_question": final_response,
         }
 
-    if state.get("intent") != "book_appointment":
+    if intent != "book_appointment":
         return {}
 
     if state.get("appointment_id") is not None:
@@ -2052,16 +2794,13 @@ def confirm_or_reject_booking(
             "booking_summary": None,
         }
 
-    if state.get("confirmation_status") != "confirmed":
+    if (
+        state.get("confirmation_status") != "confirmed"
+        or state.get("booking_summary") is None
+    ):
         return {}
 
-    required_fields = [
-        "customer_id",
-        "service_id",
-        "staff_id",
-        "slot_id",
-    ]
-
+    required_fields = ["customer_id", "service_id", "staff_id", "slot_id"]
     missing_fields = [
         field_name
         for field_name in required_fields
@@ -2098,6 +2837,9 @@ def confirm_or_reject_booking(
         "appointment_id": int(appointment["id"]),
         "appointment_reference_number": str(
             appointment["reference_number"]
+        ),
+        "current_slot_id": int(
+            appointment.get("slot_id") or state["slot_id"]
         ),
         "confirmation_status": "confirmed",
         "next_question": final_response,
@@ -2138,6 +2880,7 @@ def lookup_conversation_availability(
         return {
             "requested_date": None,
             "available_slots": slots,
+            "upcoming_alternative_slots": None,
             "slot_id": None,
             "selected_slot_summary": None,
             "booking_summary": None,
@@ -2166,6 +2909,49 @@ def lookup_conversation_availability(
     slots = check_available_slots.run(
         tool_arguments,
     )
+
+    if not slots and intent == "book_appointment":
+        alternative_slots = find_upcoming_available_slots(
+            service_id=int(service_id),
+            staff_id=(
+                int(staff_id)
+                if staff_id is not None
+                else None
+            ),
+        )
+
+        return {
+            "available_slots": alternative_slots,
+            "upcoming_alternative_slots": alternative_slots,
+        }
+
+    selected_slot = find_slot_from_message(
+        user_message=get_latest_user_message(state),
+        available_slots=slots,
+    )
+
+    if selected_slot is not None:
+        selected_start = parse_datetime(
+            selected_slot.get("start_datetime"),
+        )
+
+        return {
+            "available_slots": slots,
+            "slot_id": int(selected_slot["slot_id"]),
+            "staff_id": int(selected_slot["staff_id"]),
+            "staff_name": (
+                str(selected_slot["staff_name"])
+                if selected_slot.get("staff_name") is not None
+                else None
+            ),
+            "selected_slot_summary": format_slot_summary(selected_slot),
+            "requested_date": (
+                selected_start.date().isoformat()
+                if selected_start is not None
+                else requested_date
+            ),
+            "slot_selection_error": None,
+        }
 
     return {
         "available_slots": slots,
@@ -2228,6 +3014,14 @@ def determine_next_question(
 
     user_message = get_latest_user_message(state)
 
+    if state.get("messages") and not user_message.strip():
+        return {
+            "next_question": (
+                "Please type a message so I can help with your "
+                "appointment."
+            ),
+        }
+
     if is_human_handoff_message(user_message):
         return {
             "next_question": (
@@ -2241,6 +3035,88 @@ def determine_next_question(
         return {
             "next_question": format_graceful_exit_response(
                 user_message,
+            ),
+        }
+
+    if state.get("customer_phone_invalid"):
+        return {
+            "next_question": (
+                "Please enter a valid Sri Lankan phone number, for "
+                "example 0771234567 or +94771234567."
+            ),
+        }
+
+    if state.get("slot_selection_error") is not None:
+        return {
+            "next_question": state["slot_selection_error"],
+        }
+
+    if (
+        state.get("confirmation_status") == "pending"
+        and state.get("booking_summary") is not None
+        and is_ambiguous_confirmation_message(user_message)
+    ):
+        return {
+            "next_question": (
+                "Please reply yes to confirm, or no to cancel/change "
+                "this request."
+            ),
+        }
+
+    if is_capabilities_request(user_message):
+        return {
+            "next_question": (
+                "I can help you book, reschedule, or cancel an "
+                "appointment, check availability, list services and "
+                "prices, or view your appointments."
+            ),
+        }
+
+    if is_greeting_or_small_talk(user_message):
+        return {
+            "next_question": (
+                "I'm here and ready to help with appointments. You can "
+                "ask me to book, reschedule, cancel, check availability, "
+                "or view your appointments."
+            ),
+        }
+
+    if is_safe_information_request(user_message):
+        return {
+            "next_question": (
+                "I don't have that information available yet. Please "
+                "contact the front desk or clinic staff for accurate "
+                "details."
+            ),
+        }
+
+    if is_pricing_request(user_message):
+        services = state.get("available_services") or get_active_services()
+        matched_service = find_service_from_message(
+            user_message=user_message,
+            services=services,
+            allow_numeric_choice=False,
+        )
+
+        if matched_service is None:
+            return {
+                "next_question": (
+                    "Which service price would you like to know?\n\n"
+                    + format_service_options(services)
+                ),
+            }
+
+        price = matched_service.get("price")
+        price_text = (
+            f"LKR {float(price):,.0f}"
+            if price is not None
+            else "not currently listed"
+        )
+
+        return {
+            "next_question": (
+                f"{matched_service['name']} costs {price_text} and "
+                f"takes {matched_service.get('duration_minutes')} minutes."
             ),
         }
 
@@ -2304,6 +3180,17 @@ def determine_next_question(
         }
 
     if (
+        intent == "cancel_appointment"
+        and state.get("confirmation_status") in {
+            "confirmed",
+            "rejected",
+        }
+    ):
+        return {
+            "next_question": state.get("next_question"),
+        }
+
+    if (
         intent == "book_appointment"
         and state.get("confirmation_status") == "rejected"
     ):
@@ -2311,7 +3198,45 @@ def determine_next_question(
             "next_question": state.get("next_question"),
         }
 
-    if intent == "list_services":
+    if intent == "view_appointments":
+        reference_number = extract_appointment_reference(user_message)
+
+        if reference_number is not None:
+            appointment = get_appointment_by_reference(reference_number)
+
+            if appointment is None:
+                next_question = (
+                    "I couldn't find an appointment with that reference. "
+                    "Please check the reference number or share your "
+                    "phone number."
+                )
+            else:
+                next_question = (
+                    "Here is your appointment status:\n\n"
+                    + format_appointment_details(appointment)
+                )
+
+        elif (
+            state.get("customer_id") is not None
+            or state.get("customer_phone_number") is not None
+        ):
+            appointments = get_upcoming_appointments_for_customer(
+                customer_id=(
+                    int(state["customer_id"])
+                    if state.get("customer_id") is not None
+                    else None
+                ),
+                phone_number=state.get("customer_phone_number"),
+            )
+            next_question = format_appointment_list(appointments)
+
+        else:
+            next_question = (
+                "Sure, I can check that. Please share your phone number "
+                "or appointment reference."
+            )
+
+    elif intent == "list_services":
         next_question = (
             "These are the services currently available:\n\n"
             + format_service_options(services)
@@ -2370,12 +3295,23 @@ def determine_next_question(
 
         elif state.get("slot_id") is None:
             available_slots = state.get("available_slots")
+            alternative_slots = state.get("upcoming_alternative_slots")
             service_name = state.get("service_name") or "appointment"
             friendly_date = format_date(
                 state.get("requested_date"),
             )
 
-            if not available_slots:
+            if alternative_slots:
+                next_question = (
+                    f"There are no available {service_name} slots "
+                    f"for {friendly_date}.\n\n"
+                    + format_upcoming_available_slots(
+                        service_name=service_name,
+                        slots=alternative_slots,
+                    )
+                    + "\n\nWhich one would you prefer?"
+                )
+            elif not available_slots:
                 next_question = (
                     f"There are no available {service_name} slots "
                     f"for {friendly_date}.\n\n"
@@ -2395,11 +3331,29 @@ def determine_next_question(
                 or "the selected appointment slot"
             )
 
-            next_question = (
-                f"Great. You selected {selected_slot_summary}.\n\n"
-                "May I have your full name and phone number "
-                "for the booking?"
-            )
+            if (
+                state.get("customer_name") is not None
+                and state.get("customer_phone_number") is None
+            ):
+                next_question = (
+                    f"Great. You selected {selected_slot_summary}.\n\n"
+                    "Please enter a valid Sri Lankan phone number, for "
+                    "example 0771234567 or +94771234567."
+                )
+            elif (
+                state.get("customer_name") is None
+                and state.get("customer_phone_number") is not None
+            ):
+                next_question = (
+                    f"Great. You selected {selected_slot_summary}.\n\n"
+                    "May I have your full name for the booking?"
+                )
+            else:
+                next_question = (
+                    f"Great. You selected {selected_slot_summary}.\n\n"
+                    "May I have your full name and phone number "
+                    "for the booking?"
+                )
 
         elif state.get("confirmation_status") != "pending":
             booking_summary = format_booking_confirmation_summary(
@@ -2450,16 +3404,89 @@ def determine_next_question(
                 )
 
     elif intent == "cancel_appointment":
-        if state.get("appointment_id") is None:
-            next_question = (
-                "Sure, I can help cancel an appointment. "
-                "What is your appointment ID?"
+        appointment: dict[str, object] | None = None
+
+        if state.get("appointment_id") is not None:
+            appointment = get_appointment_by_id_for_conversation(
+                int(state["appointment_id"]),
             )
 
-        elif state.get("cancellation_reason") is None:
-            next_question = (
-                "What is the reason for the cancellation?"
+        elif state.get("appointment_reference_number") is not None:
+            appointment = get_appointment_by_reference(
+                str(state["appointment_reference_number"]),
             )
+
+        if appointment is None and (
+            state.get("customer_id") is not None
+            or state.get("customer_phone_number") is not None
+        ):
+            appointments = get_upcoming_appointments_for_customer(
+                customer_id=(
+                    int(state["customer_id"])
+                    if state.get("customer_id") is not None
+                    else None
+                ),
+                phone_number=state.get("customer_phone_number"),
+            )
+
+            if len(appointments) == 1:
+                appointment = appointments[0]
+            elif len(appointments) > 1:
+                next_question = (
+                    format_appointment_list(appointments)
+                    + "\n\nWhich appointment reference would you like "
+                    "to cancel?"
+                )
+            else:
+                next_question = (
+                    "I couldn't find any upcoming appointments for "
+                    "those details."
+                )
+
+        if appointment is not None:
+            appointment_status = str(
+                appointment.get("appointment_status") or ""
+            )
+
+            if appointment_status != AppointmentStatus.CONFIRMED.value:
+                next_question = "This appointment was already cancelled."
+            elif state.get("confirmation_status") != "pending":
+                booking_summary = (
+                    format_cancellation_confirmation_summary(appointment)
+                )
+
+                return {
+                    "appointment_id": int(
+                        appointment["appointment_id"]
+                    ),
+                    "appointment_reference_number": str(
+                        appointment["appointment_reference_number"]
+                    ),
+                    "appointment_status": appointment_status,
+                    "current_slot_id": int(
+                        appointment["current_slot_id"]
+                    ),
+                    "service_id": int(appointment["service_id"]),
+                    "service_name": str(appointment["service_name"]),
+                    "staff_id": int(appointment["staff_id"]),
+                    "staff_name": str(appointment["staff_name"]),
+                    "next_question": booking_summary,
+                    "booking_summary": booking_summary,
+                    "confirmation_status": "pending",
+                }
+
+        elif next_question is None:
+            if state.get("appointment_reference_number") is not None:
+                next_question = (
+                    "I couldn't find an appointment with that reference. "
+                    "Please check the reference number or share your "
+                    "phone number."
+                )
+            else:
+                next_question = (
+                    "Sure, I can help cancel an appointment. Please "
+                    "share your phone number or appointment reference."
+                )
 
     elif intent == "reschedule_appointment":
         service_name = state.get("service_name") or "appointment"
@@ -2514,6 +3541,14 @@ def determine_next_question(
                 "confirmation_status": "pending",
             }
 
+    elif intent == "general_question":
+        if is_likely_gibberish(user_message):
+            next_question = (
+                "I didn't quite catch that. I can help you book, "
+                "reschedule, cancel, check availability, or view "
+                "appointments."
+            )
+
     return {
         "next_question": next_question,
     }
@@ -2533,17 +3568,28 @@ def call_model(
             ],
         }
 
-    model = get_chat_model()
+    try:
+        model = get_chat_model()
 
-    if hasattr(model, "bind_tools"):
-        model = model.bind_tools(READ_ONLY_TOOLS)
+        if hasattr(model, "bind_tools"):
+            model = model.bind_tools(READ_ONLY_TOOLS)
 
-    response = model.invoke(
-        [
-            SystemMessage(content=SYSTEM_PROMPT),
-            *state["messages"],
-        ]
-    )
+        response = model.invoke(
+            [
+                SystemMessage(content=SYSTEM_PROMPT),
+                *state["messages"],
+            ]
+        )
+
+    except Exception:
+        response = LangChainAIMessage(
+            content=(
+                "I'm having trouble reaching the AI model right now, "
+                "but I can still help with appointments. You can ask "
+                "me to book, reschedule, cancel, check availability, "
+                "or view your appointments."
+            )
+        )
 
     return {
         "messages": [response],
@@ -2588,6 +3634,10 @@ def build_appointment_agent():
     graph_builder.add_node(
         "lookup_conversation_availability",
         lookup_conversation_availability,
+    )
+    graph_builder.add_node(
+        "resolve_customer_after_availability",
+        resolve_customer_details,
     )
 
     graph_builder.add_node(
@@ -2642,6 +3692,11 @@ def build_appointment_agent():
 
     graph_builder.add_edge(
         "lookup_conversation_availability",
+        "resolve_customer_after_availability",
+    )
+
+    graph_builder.add_edge(
+        "resolve_customer_after_availability",
         "determine_next_question",
     )
 

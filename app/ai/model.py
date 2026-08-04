@@ -23,6 +23,8 @@ def get_chat_model() -> BaseChatModel:
         return ChatGoogleGenerativeAI(
             model=settings.gemini_model,
             google_api_key=settings.google_api_key,
+            retries=0,
+            request_timeout=10,
 )
 
     if not settings.openai_api_key:

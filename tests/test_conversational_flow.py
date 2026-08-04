@@ -187,6 +187,110 @@ def test_booking_conversation_preserves_state() -> None:
     )
 
 
+def test_booking_with_all_details_in_one_message_does_not_reask() -> None:
+    thread_id = "booking-all-details-one-message-test-001"
+    config = {"configurable": {"thread_id": thread_id}}
+    mocked_tool = MagicMock()
+    mocked_tool.run.return_value = DEMO_SLOTS
+
+    with (
+        patch(
+            "app.ai.agent.get_active_services",
+            return_value=DEMO_SERVICES,
+        ),
+        patch(
+            "app.ai.agent.get_active_staff_for_service",
+            return_value=DEMO_STAFF,
+        ),
+        patch(
+            "app.ai.agent.check_available_slots",
+            mocked_tool,
+        ),
+        patch(
+            "app.ai.agent.get_or_create_customer_from_details",
+            return_value={
+                "id": 11,
+                "full_name": "Kivaane",
+                "phone_number": "+94771234567",
+            },
+        ) as mocked_customer_lookup,
+    ):
+        result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content=(
+                            "Book dental tomorrow at 10am, I'm Kivaane, "
+                            "0771234567"
+                        )
+                    )
+                ]
+            },
+            config=config,
+        )
+
+    response = result["messages"][-1]
+    assert isinstance(response, AIMessage)
+    assert "Please confirm your appointment" in response.content
+    assert "Name: Kivaane" in response.content
+    assert "Phone: +94771234567" in response.content
+    assert result["slot_id"] == 7
+    assert result["customer_id"] == 11
+    assert result["confirmation_status"] == "pending"
+    mocked_customer_lookup.assert_called_once_with(
+        full_name="Kivaane",
+        phone_number="+94771234567",
+    )
+
+
+def test_booking_no_slots_offers_selectable_upcoming_alternatives() -> None:
+    thread_id = "booking-no-slots-upcoming-alternatives-test-001"
+    config = {"configurable": {"thread_id": thread_id}}
+    mocked_tool = MagicMock()
+    mocked_tool.run.return_value = []
+
+    with (
+        patch(
+            "app.ai.agent.get_active_services",
+            return_value=DEMO_SERVICES,
+        ),
+        patch(
+            "app.ai.agent.get_active_staff_for_service",
+            return_value=DEMO_STAFF,
+        ),
+        patch(
+            "app.ai.agent.check_available_slots",
+            mocked_tool,
+        ),
+        patch(
+            "app.ai.agent.find_upcoming_available_slots",
+            return_value=DEMO_SLOTS,
+        ) as mocked_upcoming_lookup,
+    ):
+        result = appointment_agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(
+                        content="Book dental on 2026-08-06"
+                    )
+                ]
+            },
+            config=config,
+        )
+
+    response = result["messages"][-1]
+    assert isinstance(response, AIMessage)
+    assert "There are no available Dental care slots" in response.content
+    assert "Next available slots:" in response.content
+    assert "Which one would you prefer?" in response.content
+    assert result["available_slots"] == DEMO_SLOTS
+    assert result["upcoming_alternative_slots"] == DEMO_SLOTS
+    mocked_upcoming_lookup.assert_called_once_with(
+        service_id=2,
+        staff_id=5,
+    )
+
+
 def test_booking_conversation_collects_customer_and_shows_summary() -> None:
     thread_id = "booking-conversation-customer-summary-test-001"
 
@@ -284,17 +388,17 @@ def test_booking_conversation_collects_customer_and_shows_summary() -> None:
         assert "Date: Wednesday, 05 August 2026" in final_text
         assert "Time: 10:00 AM – 10:30 AM" in final_text
         assert "Name: Kivaane Anton" in final_text
-        assert "Phone: 0774588691" in final_text
+        assert "Phone: +94774588691" in final_text
         assert "Should I confirm this booking?" in final_text
 
         assert result.get("customer_id") == 11
         assert result.get("customer_name") == "Kivaane Anton"
-        assert result.get("customer_phone_number") == "0774588691"
+        assert result.get("customer_phone_number") == "+94774588691"
         assert result.get("confirmation_status") == "pending"
 
     mocked_customer_lookup.assert_called_once_with(
         full_name="Kivaane Anton",
-        phone_number="0774588691",
+        phone_number="+94774588691",
     )
 
 
@@ -1021,7 +1125,7 @@ def test_booking_conversation_allows_second_slot_before_confirmation() -> None:
         assert "Date: Wednesday, 05 August 2026" in final_text
         assert "Time: 2:30 PM – 3:00 PM" in final_text
         assert "Name: Kivaane Anton" in final_text
-        assert "Phone: 0774588691" in final_text
+        assert "Phone: +94774588691" in final_text
 
         assert result.get("slot_id") == 8
         assert result.get("selected_slot_summary") == (

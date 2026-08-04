@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from app.ai.agent import determine_next_question
 
 
@@ -158,7 +160,7 @@ def test_check_availability_asks_for_date() -> None:
     )
 
 
-def test_cancel_asks_for_appointment_id() -> None:
+def test_cancel_asks_for_phone_or_reference() -> None:
     result = determine_next_question(
         {
             "intent": "cancel_appointment",
@@ -167,21 +169,37 @@ def test_cancel_asks_for_appointment_id() -> None:
 
     assert result["next_question"] == (
         "Sure, I can help cancel an appointment. "
-        "What is your appointment ID?"
+        "Please share your phone number or appointment reference."
     )
 
 
-def test_cancel_asks_for_reason() -> None:
-    result = determine_next_question(
-        {
-            "intent": "cancel_appointment",
+def test_cancel_shows_confirmation_for_known_appointment() -> None:
+    with patch(
+        "app.ai.agent.get_appointment_by_id_for_conversation",
+        return_value={
             "appointment_id": 12,
-        }
-    )
+            "appointment_reference_number": "APT-TEST1234",
+            "appointment_status": "CONFIRMED",
+            "current_slot_id": 7,
+            "service_id": 2,
+            "service_name": "Dental care",
+            "staff_id": 5,
+            "staff_name": "Dr. Perera",
+            "start_datetime": "2026-08-05T10:00:00",
+            "end_datetime": "2026-08-05T10:30:00",
+        },
+    ):
+        result = determine_next_question(
+            {
+                "intent": "cancel_appointment",
+                "appointment_id": 12,
+            }
+        )
 
-    assert result["next_question"] == (
-        "What is the reason for the cancellation?"
+    assert "Should I cancel this appointment?" in str(
+        result["next_question"],
     )
+    assert result["confirmation_status"] == "pending"
 
 
 def test_reschedule_asks_for_appointment_id() -> None:
