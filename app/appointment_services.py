@@ -369,3 +369,53 @@ def reschedule_appointment(
     database.refresh(appointment)
 
     return appointment
+
+def reschedule_appointment(
+    database,
+    appointment_id: int,
+    new_slot_id: int,
+):
+    """Move an existing confirmed appointment to a new available slot."""
+
+    appointment = (
+        database.query(Appointment)
+        .filter(Appointment.id == appointment_id)
+        .first()
+    )
+
+    if appointment is None:
+        raise InvalidAppointmentError("appointment was not found.")
+
+    old_slot = (
+        database.query(AvailabilitySlot)
+        .filter(AvailabilitySlot.id == appointment.slot_id)
+        .first()
+    )
+
+    new_slot = (
+        database.query(AvailabilitySlot)
+        .filter(AvailabilitySlot.id == new_slot_id)
+        .first()
+    )
+
+    if new_slot is None:
+        raise InvalidAppointmentError("new slot was not found.")
+
+    if new_slot.status != AvailabilityStatus.AVAILABLE:
+        raise AppointmentConflictError("the new slot is not available.")
+
+    if old_slot is not None:
+        old_slot.status = AvailabilityStatus.AVAILABLE
+
+    new_slot.status = AvailabilityStatus.BOOKED
+
+    appointment.slot_id = new_slot.id
+    appointment.staff_id = new_slot.staff_id
+    appointment.service_id = new_slot.service_id
+    appointment.start_datetime = new_slot.start_datetime
+    appointment.end_datetime = new_slot.end_datetime
+
+    database.commit()
+    database.refresh(appointment)
+
+    return appointment
