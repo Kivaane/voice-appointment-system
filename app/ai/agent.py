@@ -573,6 +573,61 @@ def format_available_slots(
     return "\n".join(lines)
 
 
+def format_upcoming_available_slots(
+    service_name: str,
+    slots: list[dict[str, object]],
+) -> str:
+    """Format upcoming slots as a friendly list grouped by date."""
+
+    if not slots:
+        return (
+            f"I checked upcoming {service_name} availability, but "
+            "there are no available slots in the current demo data. "
+            "You can try another service or ask staff to add more "
+            "availability."
+        )
+
+    sorted_slots = sorted(
+        slots,
+        key=lambda slot: str(slot.get("start_datetime") or ""),
+    )
+    lines = [
+        f"I checked upcoming {service_name} availability.",
+        "",
+        "Next available slots:",
+    ]
+    current_date: str | None = None
+
+    for index, slot in enumerate(sorted_slots, start=1):
+        parsed_start = parse_datetime(
+            slot.get("start_datetime"),
+        )
+        slot_date = (
+            parsed_start.date().isoformat()
+            if parsed_start is not None
+            else ""
+        )
+
+        if slot_date != current_date:
+            current_date = slot_date
+            lines.extend(
+                [
+                    "",
+                    f"{format_date(slot_date)}:",
+                ]
+            )
+
+        start_time = format_time(slot.get("start_datetime"))
+        end_time = format_time(slot.get("end_datetime"))
+        staff_name = slot.get("staff_name") or "available staff"
+
+        lines.append(
+            f"{index}. {start_time} – {end_time} with {staff_name}"
+        )
+
+    return "\n".join(lines)
+
+
 def find_slot_from_message(
     user_message: str,
     available_slots: list[dict[str, object]] | None,
@@ -1119,6 +1174,58 @@ def is_explicit_new_booking_message(
         for phrase in new_booking_phrases
     )
 
+
+def is_upcoming_availability_request(
+    user_message: str,
+) -> bool:
+    """Return True when the user asks for the next available dates."""
+
+    normalized_message = normalize_text(user_message)
+    upcoming_availability_phrases = (
+        "which date available",
+        "which dates are available",
+        "tell me available dates",
+        "show available dates",
+        "any available date",
+        "when are you available",
+    )
+
+    return any(
+        phrase in normalized_message
+        for phrase in upcoming_availability_phrases
+    )
+
+
+def find_upcoming_available_slots(
+    service_id: int,
+    staff_id: int | None = None,
+    days_to_search: int = 14,
+) -> list[dict[str, object]]:
+    """Search real availability over the next several days."""
+
+    upcoming_slots: list[dict[str, object]] = []
+    today = date.today()
+
+    for day_offset in range(days_to_search):
+        requested_date = (
+            today + timedelta(days=day_offset)
+        ).isoformat()
+        tool_arguments: dict[str, object] = {
+            "service_id": service_id,
+            "requested_date": requested_date,
+        }
+
+        if staff_id is not None:
+            tool_arguments["staff_id"] = staff_id
+
+        slots = check_available_slots.run(tool_arguments)
+        upcoming_slots.extend(slots)
+
+    return sorted(
+        upcoming_slots,
+        key=lambda slot: str(slot.get("start_datetime") or ""),
+    )
+
 def create_confirmed_appointment_from_state(
     state: AppointmentAgentState,
 ) -> dict[str, object]:
@@ -1609,6 +1716,15 @@ def extract_details(
             selected_slot,
         )
 
+        selected_start = parse_datetime(
+            selected_slot.get("start_datetime"),
+        )
+
+        if selected_start is not None:
+            extracted["requested_date"] = (
+                selected_start.date().isoformat()
+            )
+
         if (
             state.get("confirmation_status") == "pending"
             and state.get("intent") == "book_appointment"
@@ -2003,6 +2119,31 @@ def lookup_conversation_availability(
         return {}
 
     service_id = state.get("service_id")
+
+    if is_upcoming_availability_request(
+        get_latest_user_message(state),
+    ):
+        if service_id is None:
+            return {}
+
+        slots = find_upcoming_available_slots(
+            service_id=int(service_id),
+            staff_id=(
+                int(state["staff_id"])
+                if state.get("staff_id") is not None
+                else None
+            ),
+        )
+
+        return {
+            "requested_date": None,
+            "available_slots": slots,
+            "slot_id": None,
+            "selected_slot_summary": None,
+            "booking_summary": None,
+            "confirmation_status": "not_requested",
+        }
+
     requested_date = state.get("requested_date")
     slot_id = state.get("slot_id")
 
@@ -2100,6 +2241,33 @@ def determine_next_question(
         return {
             "next_question": format_graceful_exit_response(
                 user_message,
+            ),
+        }
+
+    if is_upcoming_availability_request(user_message):
+        service_id = state.get("service_id")
+
+        if service_id is None:
+            services = (
+                state.get("available_services")
+                or get_active_services()
+            )
+
+            return {
+                "next_question": (
+                    "Which service would you like to check?\n\n"
+                    "Available services:\n"
+                    + format_service_options(services)
+                ),
+            }
+
+        service_name = state.get("service_name") or "appointment"
+        available_slots = state.get("available_slots") or []
+
+        return {
+            "next_question": format_upcoming_available_slots(
+                service_name=service_name,
+                slots=available_slots,
             ),
         }
 
