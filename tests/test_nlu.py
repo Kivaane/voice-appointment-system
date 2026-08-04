@@ -114,3 +114,44 @@ def test_address_question_is_location_intent():
 
     assert result.intent == "ask_location"
     assert result.should_start_booking is False
+
+def test_insurance_question_is_insurance_intent():
+    result = classify_message("do you accept insurance?")
+
+    assert result.intent == "ask_insurance"
+    assert result.should_start_booking is False
+
+
+def test_health_insurance_question_is_insurance_intent():
+    result = classify_message("can I use health insurance?")
+
+    assert result.intent == "ask_insurance"
+    assert result.should_start_booking is False
+
+
+def test_cancellation_policy_question_is_policy_intent():
+    result = classify_message("what is your cancellation policy?")
+
+    assert result.intent == "ask_cancellation_policy"
+    assert result.should_start_booking is False
+
+
+def test_cancel_fee_question_is_policy_intent():
+    result = classify_message("is there a cancel fee?")
+
+    assert result.intent == "ask_cancellation_policy"
+    assert result.should_start_booking is False
+
+
+def test_payment_methods_question_is_payment_intent():
+    result = classify_message("how can I pay?")
+
+    assert result.intent == "ask_payment_methods"
+    assert result.should_start_booking is False
+
+
+def test_card_payment_question_is_payment_intent():
+    result = classify_message("do you accept card payment?")
+
+    assert result.intent == "ask_payment_methods"
+    assert result.should_start_booking is False

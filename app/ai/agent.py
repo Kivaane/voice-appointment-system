@@ -3211,6 +3211,19 @@ def determine_next_question(
                 "details."
             ),
         }
+    if nlu_result.intent in {
+        "ask_insurance",
+        "ask_cancellation_policy",
+        "ask_payment_methods",
+    }:
+        return {
+            "intent": "general_question",
+            "next_question": (
+                "I don't have that information available yet. Please "
+                "contact the front desk or clinic staff for accurate "
+                "details."
+            ),
+        }
 
     if is_human_handoff_message(user_message):
         return {

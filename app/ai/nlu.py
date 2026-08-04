@@ -181,6 +181,53 @@ def is_location_question(text: str) -> bool:
 
     return any(phrase in text for phrase in location_phrases)
 
+def is_insurance_question(text: str) -> bool:
+    insurance_phrases = [
+        "insurance",
+        "do you accept insurance",
+        "accept insurance",
+        "medical insurance",
+        "health insurance",
+        "claim insurance",
+        "insurance claim",
+        "can i use insurance",
+    ]
+
+    return any(phrase in text for phrase in insurance_phrases)
+
+
+def is_cancellation_policy_question(text: str) -> bool:
+    cancellation_policy_phrases = [
+        "cancellation policy",
+        "cancel policy",
+        "policy for cancellation",
+        "can i cancel",
+        "how late can i cancel",
+        "cancel fee",
+        "cancellation fee",
+        "reschedule policy",
+        "policy for rescheduling",
+    ]
+
+    return any(phrase in text for phrase in cancellation_policy_phrases)
+
+
+def is_payment_methods_question(text: str) -> bool:
+    payment_phrases = [
+        "payment",
+        "payments",
+        "payment methods",
+        "how can i pay",
+        "can i pay by card",
+        "card payment",
+        "cash payment",
+        "online payment",
+        "do you accept card",
+        "do you take cash",
+    ]
+
+    return any(phrase in text for phrase in payment_phrases)
+
 def classify_message(message: str) -> NLUResult:
     text = normalize_message(message)
 
@@ -217,6 +264,26 @@ def classify_message(message: str) -> NLUResult:
     if is_location_question(text):
         return NLUResult(
             intent="ask_location",
+            confidence=0.92,
+            should_start_booking=False,
+        )
+    if is_insurance_question(text):
+        return NLUResult(
+            intent="ask_insurance",
+            confidence=0.92,
+            should_start_booking=False,
+        )
+
+    if is_cancellation_policy_question(text):
+        return NLUResult(
+            intent="ask_cancellation_policy",
+            confidence=0.92,
+            should_start_booking=False,
+        )
+
+    if is_payment_methods_question(text):
+        return NLUResult(
+            intent="ask_payment_methods",
             confidence=0.92,
             should_start_booking=False,
         )
