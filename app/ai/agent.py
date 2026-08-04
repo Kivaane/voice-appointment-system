@@ -3110,6 +3110,98 @@ def determine_next_question(
                 "Would you like to book it or check availability?"
             ),
         }
+    if nlu_result.intent == "ask_pricing":
+        services = state.get("available_services") or get_active_services()
+
+        matched_service = find_service_from_message(
+            user_message=user_message,
+            services=services,
+            allow_numeric_choice=False,
+        )
+
+        if matched_service is None:
+            lower_message = user_message.lower()
+
+            if any(
+                word in lower_message
+                for word in ["tooth", "teeth", "dentist", "dental"]
+            ):
+                matched_service = next(
+                    (
+                        service
+                        for service in services
+                        if "dental" in str(
+                            service.get("name", "")
+                        ).lower()
+                    ),
+                    None,
+                )
+
+            elif any(
+                word in lower_message
+                for word in ["skin", "dermatology"]
+            ):
+                matched_service = next(
+                    (
+                        service
+                        for service in services
+                        if "dermatology" in str(
+                            service.get("name", "")
+                        ).lower()
+                    ),
+                    None,
+                )
+
+            elif any(
+                word in lower_message
+                for word in ["physio", "physiotherapy"]
+            ):
+                matched_service = next(
+                    (
+                        service
+                        for service in services
+                        if "physio" in str(
+                            service.get("name", "")
+                        ).lower()
+                    ),
+                    None,
+                )
+
+        if matched_service is None:
+            return {
+                "intent": "general_question",
+                "next_question": (
+                    "Which service price would you like to know?\n\n"
+                    + format_service_options(services)
+                ),
+            }
+
+        price = matched_service.get("price")
+        price_text = (
+            f"LKR {float(price):,.0f}"
+            if price is not None
+            else "not currently listed"
+        )
+
+        return {
+            "intent": "general_question",
+            "next_question": (
+                f"{matched_service['name']} costs {price_text} and "
+                f"takes {matched_service.get('duration_minutes')} minutes."
+            ),
+        }
+
+    if nlu_result.intent == "ask_service_list":
+        services = state.get("available_services") or get_active_services()
+
+        return {
+            "intent": "general_question",
+            "next_question": (
+                "These are the services currently available:\n\n"
+                + format_service_options(services)
+                + "\n\nWould you like to book one of these or check availability?"
+            ),
+        }
 
     if is_human_handoff_message(user_message):
         return {

@@ -304,3 +304,90 @@ def test_unknown_service_question_lists_available_services():
     assert "Dental care" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
     assert result["intent"] == "general_question"
+
+def test_pricing_question_does_not_start_booking_flow():
+    from app.ai.agent import determine_next_question
+
+    state = {
+        "messages": [
+            HumanMessage(content="how much is dental?")
+        ],
+        "intent": "book_appointment",
+        "available_services": [
+            {
+                "service_id": 1,
+                "name": "Dental care",
+                "description": "Dental checkups",
+                "duration_minutes": 30,
+                "price": 3500,
+            }
+        ],
+    }
+
+    result = determine_next_question(state)
+
+    assert "Dental care costs LKR 3,500" in result["next_question"]
+    assert "Which service would you like" not in result["next_question"]
+    assert result["intent"] == "general_question"
+
+
+def test_pricing_question_without_service_asks_which_service():
+    from app.ai.agent import determine_next_question
+
+    state = {
+        "messages": [
+            HumanMessage(content="how much is the appointment?")
+        ],
+        "intent": "book_appointment",
+        "available_services": [
+            {
+                "service_id": 1,
+                "name": "Dental care",
+                "description": "Dental checkups",
+                "duration_minutes": 30,
+                "price": 3500,
+            }
+        ],
+    }
+
+    result = determine_next_question(state)
+
+    assert "Which service price would you like to know" in result["next_question"]
+    assert "Dental care" in result["next_question"]
+    assert "Which service would you like" not in result["next_question"]
+    assert result["intent"] == "general_question"
+
+
+def test_service_list_question_does_not_start_booking_flow():
+    from app.ai.agent import determine_next_question
+
+    state = {
+        "messages": [
+            HumanMessage(content="what services do you have?")
+        ],
+        "intent": "book_appointment",
+        "available_services": [
+            {
+                "service_id": 1,
+                "name": "Dental care",
+                "description": "Dental checkups",
+                "duration_minutes": 30,
+                "price": 3500,
+            },
+            {
+                "service_id": 2,
+                "name": "Physiotherapy",
+                "description": "Physiotherapy treatment",
+                "duration_minutes": 45,
+                "price": 4500,
+            },
+        ],
+    }
+
+    result = determine_next_question(state)
+
+    assert "These are the services currently available" in result["next_question"]
+    assert "Dental care" in result["next_question"]
+    assert "Physiotherapy" in result["next_question"]
+    assert "Which service would you like" not in result["next_question"]
+    assert result["intent"] == "general_question"

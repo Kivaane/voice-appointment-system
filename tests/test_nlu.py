@@ -60,3 +60,30 @@ def test_tooth_cleaning_question_is_service_availability_question():
 
     assert result.intent == "ask_service_availability"
     assert result.should_start_booking is False
+
+def test_dental_price_question_is_pricing_intent():
+    result = classify_message("how much is dental?")
+
+    assert result.intent == "ask_pricing"
+    assert result.should_start_booking is False
+
+
+def test_physiotherapy_price_question_is_pricing_intent():
+    result = classify_message("price of physiotherapy")
+
+    assert result.intent == "ask_pricing"
+    assert result.should_start_booking is False
+
+
+def test_service_list_question_is_service_list_intent():
+    result = classify_message("what services do you have?")
+
+    assert result.intent == "ask_service_list"
+    assert result.should_start_booking is False
+
+
+def test_available_services_question_is_service_list_intent():
+    result = classify_message("show available services")
+
+    assert result.intent == "ask_service_list"
+    assert result.should_start_booking is False

@@ -96,6 +96,57 @@ def is_service_availability_question(text: str) -> bool:
         word in text for word in service_words
     )
 
+def is_pricing_question(text: str) -> bool:
+    pricing_words = [
+        "price",
+        "prices",
+        "cost",
+        "costs",
+        "fee",
+        "fees",
+        "charge",
+        "charges",
+        "how much",
+        "rate",
+        "rates",
+    ]
+
+    service_words = [
+        "dental",
+        "dentist",
+        "tooth",
+        "teeth",
+        "physio",
+        "physiotherapy",
+        "dermatology",
+        "skin",
+        "general consultation",
+        "consultation",
+    ]
+
+    return any(word in text for word in pricing_words) and (
+        any(word in text for word in service_words)
+        or "service" in text
+        or "appointment" in text
+    )
+
+
+def is_service_list_question(text: str) -> bool:
+    service_list_phrases = [
+        "what services do you have",
+        "what services are available",
+        "show services",
+        "list services",
+        "available services",
+        "services available",
+        "what do you offer",
+        "what can i book",
+        "what appointments can i book",
+        "what kind of appointments",
+    ]
+
+    return any(phrase in text for phrase in service_list_phrases)
+
 
 
 def classify_message(message: str) -> NLUResult:
@@ -108,6 +159,19 @@ def classify_message(message: str) -> NLUResult:
         return NLUResult(
             intent="ask_notification_capability",
             confidence=0.98,
+            should_start_booking=False,
+        )
+    if is_pricing_question(text):
+        return NLUResult(
+            intent="ask_pricing",
+            confidence=0.92,
+            should_start_booking=False,
+        )
+
+    if is_service_list_question(text):
+        return NLUResult(
+            intent="ask_service_list",
+            confidence=0.92,
             should_start_booking=False,
         )
     if is_service_availability_question(text):
