@@ -3039,6 +3039,77 @@ def determine_next_question(
                 "email, or calls."
             ),
         }
+    
+    if nlu_result.intent == "ask_service_availability":
+        services = state.get("available_services") or get_active_services()
+
+        matched_service = find_service_from_message(
+            user_message=user_message,
+            services=services,
+            allow_numeric_choice=False,
+        )
+
+        if matched_service is None:
+            lower_message = user_message.lower()
+
+            if any(word in lower_message for word in ["tooth", "teeth", "dentist", "dental"]):
+                matched_service = next(
+                    (
+                        service
+                        for service in services
+                        if "dental" in str(service.get("name", "")).lower()
+                    ),
+                    None,
+                )
+
+            elif any(word in lower_message for word in ["skin", "dermatology"]):
+                matched_service = next(
+                    (
+                        service
+                        for service in services
+                        if "dermatology" in str(service.get("name", "")).lower()
+                    ),
+                    None,
+                )
+
+            elif any(word in lower_message for word in ["physio", "physiotherapy"]):
+                matched_service = next(
+                    (
+                        service
+                        for service in services
+                        if "physio" in str(service.get("name", "")).lower()
+                    ),
+                    None,
+                )
+
+        if matched_service is None:
+            return {
+                "intent": "general_question",
+                "next_question": (
+                    "I don't see that service listed.\n\n"
+                    "These are the services currently available:\n\n"
+                    + format_service_options(services)
+                ),
+            }
+
+        price = matched_service.get("price")
+        price_text = (
+            f"LKR {float(price):,.0f}"
+            if price is not None
+            else "not currently listed"
+        )
+
+        return {
+            "intent": "general_question",
+            "next_question": (
+                f"Yes, we offer {matched_service['name']}.\n\n"
+                f"{matched_service['name']} — "
+                f"{matched_service.get('description') or 'Service details are available.'}\n"
+                f"Duration: {matched_service.get('duration_minutes')} minutes\n"
+                f"Price: {price_text}\n\n"
+                "Would you like to book it or check availability?"
+            ),
+        }
 
     if is_human_handoff_message(user_message):
         return {

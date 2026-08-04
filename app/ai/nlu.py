@@ -63,6 +63,40 @@ def is_notification_question(text: str) -> bool:
 
     return has_booking_context and has_notification_context
 
+def is_service_availability_question(text: str) -> bool:
+    service_question_phrases = [
+        "do you have",
+        "do you offer",
+        "do you provide",
+        "do you do",
+        "is there",
+        "are there",
+        "available service",
+        "service available",
+        "can i get",
+        "can you do",
+    ]
+
+    service_words = [
+        "dental",
+        "dentist",
+        "tooth",
+        "teeth",
+        "physio",
+        "physiotherapy",
+        "dermatology",
+        "skin",
+        "general consultation",
+        "consultation",
+        "surgery",
+        "cleaning",
+    ]
+
+    return any(phrase in text for phrase in service_question_phrases) and any(
+        word in text for word in service_words
+    )
+
+
 
 def classify_message(message: str) -> NLUResult:
     text = normalize_message(message)
@@ -74,6 +108,12 @@ def classify_message(message: str) -> NLUResult:
         return NLUResult(
             intent="ask_notification_capability",
             confidence=0.98,
+            should_start_booking=False,
+        )
+    if is_service_availability_question(text):
+        return NLUResult(
+            intent="ask_service_availability",
+            confidence=0.9,
             should_start_booking=False,
         )
 

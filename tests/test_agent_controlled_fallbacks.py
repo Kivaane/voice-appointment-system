@@ -250,3 +250,57 @@ def test_notification_question_does_not_start_booking_flow():
     assert "Which service would you like" not in result["next_question"]
     assert "Available services" not in result["next_question"]
     assert result["intent"] == "general_question"
+
+
+def test_service_question_does_not_start_booking_flow():
+    from app.ai.agent import determine_next_question
+
+    state = {
+        "messages": [
+            HumanMessage(content="do you have dental?")
+        ],
+        "intent": "book_appointment",
+        "available_services": [
+            {
+                "service_id": 1,
+                "name": "Dental care",
+                "description": "Dental checkups",
+                "duration_minutes": 30,
+                "price": 3500,
+            }
+        ],
+    }
+
+    result = determine_next_question(state)
+
+    assert "Yes, we offer Dental care" in result["next_question"]
+    assert "Which service would you like" not in result["next_question"]
+    assert "Available services:" not in result["next_question"]
+    assert result["intent"] == "general_question"
+
+
+def test_unknown_service_question_lists_available_services():
+    from app.ai.agent import determine_next_question
+
+    state = {
+        "messages": [
+            HumanMessage(content="do you do surgery?")
+        ],
+        "intent": "book_appointment",
+        "available_services": [
+            {
+                "service_id": 1,
+                "name": "Dental care",
+                "description": "Dental checkups",
+                "duration_minutes": 30,
+                "price": 3500,
+            }
+        ],
+    }
+
+    result = determine_next_question(state)
+
+    assert "I don't see that service listed" in result["next_question"]
+    assert "Dental care" in result["next_question"]
+    assert "Which service would you like" not in result["next_question"]
+    assert result["intent"] == "general_question"
