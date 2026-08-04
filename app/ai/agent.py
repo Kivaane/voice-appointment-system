@@ -3202,6 +3202,15 @@ def determine_next_question(
                 + "\n\nWould you like to book one of these or check availability?"
             ),
         }
+    if nlu_result.intent in {"ask_opening_hours", "ask_location"}:
+        return {
+            "intent": "general_question",
+            "next_question": (
+                "I don't have that information available yet. Please "
+                "contact the front desk or clinic staff for accurate "
+                "details."
+            ),
+        }
 
     if is_human_handoff_message(user_message):
         return {

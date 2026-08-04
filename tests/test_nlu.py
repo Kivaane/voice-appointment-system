@@ -87,3 +87,30 @@ def test_available_services_question_is_service_list_intent():
 
     assert result.intent == "ask_service_list"
     assert result.should_start_booking is False
+
+def test_opening_hours_question_is_opening_hours_intent():
+    result = classify_message("what time are you open?")
+
+    assert result.intent == "ask_opening_hours"
+    assert result.should_start_booking is False
+
+
+def test_closing_time_question_is_opening_hours_intent():
+    result = classify_message("when do you close?")
+
+    assert result.intent == "ask_opening_hours"
+    assert result.should_start_booking is False
+
+
+def test_location_question_is_location_intent():
+    result = classify_message("where are you located?")
+
+    assert result.intent == "ask_location"
+    assert result.should_start_booking is False
+
+
+def test_address_question_is_location_intent():
+    result = classify_message("what is your address?")
+
+    assert result.intent == "ask_location"
+    assert result.should_start_booking is False

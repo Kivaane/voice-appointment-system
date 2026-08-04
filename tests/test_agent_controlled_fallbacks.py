@@ -391,3 +391,54 @@ def test_service_list_question_does_not_start_booking_flow():
     assert "Physiotherapy" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
     assert result["intent"] == "general_question"
+
+def test_opening_hours_question_does_not_start_booking_flow():
+    from app.ai.agent import determine_next_question
+
+    state = {
+        "messages": [
+            HumanMessage(content="what time are you open?")
+        ],
+        "intent": "book_appointment",
+        "available_services": [
+            {
+                "service_id": 1,
+                "name": "Dental care",
+                "description": "Dental checkups",
+                "duration_minutes": 30,
+                "price": 3500,
+            }
+        ],
+    }
+
+    result = determine_next_question(state)
+
+    assert "I don't have that information available yet" in result["next_question"]
+    assert "Which service would you like" not in result["next_question"]
+    assert result["intent"] == "general_question"
+
+
+def test_location_question_does_not_start_booking_flow():
+    from app.ai.agent import determine_next_question
+
+    state = {
+        "messages": [
+            HumanMessage(content="where are you located?")
+        ],
+        "intent": "book_appointment",
+        "available_services": [
+            {
+                "service_id": 1,
+                "name": "Dental care",
+                "description": "Dental checkups",
+                "duration_minutes": 30,
+                "price": 3500,
+            }
+        ],
+    }
+
+    result = determine_next_question(state)
+
+    assert "I don't have that information available yet" in result["next_question"]
+    assert "Which service would you like" not in result["next_question"]
+    assert result["intent"] == "general_question"

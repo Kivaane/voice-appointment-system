@@ -147,7 +147,39 @@ def is_service_list_question(text: str) -> bool:
 
     return any(phrase in text for phrase in service_list_phrases)
 
+def is_opening_hours_question(text: str) -> bool:
+    opening_hours_phrases = [
+        "opening hours",
+        "open hours",
+        "working hours",
+        "business hours",
+        "what time are you open",
+        "when are you open",
+        "are you open",
+        "what time do you close",
+        "when do you close",
+        "open today",
+        "open tomorrow",
+        "clinic hours",
+    ]
 
+    return any(phrase in text for phrase in opening_hours_phrases)
+
+
+def is_location_question(text: str) -> bool:
+    location_phrases = [
+        "where are you located",
+        "where is the clinic",
+        "clinic location",
+        "your location",
+        "location",
+        "address",
+        "where are you",
+        "how do i get there",
+        "directions",
+    ]
+
+    return any(phrase in text for phrase in location_phrases)
 
 def classify_message(message: str) -> NLUResult:
     text = normalize_message(message)
@@ -171,6 +203,20 @@ def classify_message(message: str) -> NLUResult:
     if is_service_list_question(text):
         return NLUResult(
             intent="ask_service_list",
+            confidence=0.92,
+            should_start_booking=False,
+        )
+
+    if is_opening_hours_question(text):
+        return NLUResult(
+            intent="ask_opening_hours",
+            confidence=0.92,
+            should_start_booking=False,
+        )
+
+    if is_location_question(text):
+        return NLUResult(
+            intent="ask_location",
             confidence=0.92,
             should_start_booking=False,
         )
