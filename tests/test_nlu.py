@@ -204,3 +204,78 @@ def test_cannot_come_is_cancel_intent():
 
     assert result.intent == "cancel_appointment"
     assert result.should_start_booking is False
+
+def test_dental_availability_question_is_check_availability_intent():
+    result = classify_message("is dental available tomorrow?")
+
+    assert result.intent == "check_availability"
+    assert result.should_start_booking is False
+
+
+def test_physiotherapy_slots_question_is_check_availability_intent():
+    result = classify_message("any physiotherapy slots next monday?")
+
+    assert result.intent == "check_availability"
+    assert result.should_start_booking is False
+
+
+def test_my_appointments_question_is_view_appointments_intent():
+    result = classify_message("do I have any appointments?")
+
+    assert result.intent == "view_appointments"
+    assert result.should_start_booking is False
+
+
+def test_appointment_time_question_is_view_appointments_intent():
+    result = classify_message("what time is my appointment?")
+
+    assert result.intent == "view_appointments"
+    assert result.should_start_booking is False
+
+
+def test_dental_duration_question_is_duration_intent():
+    result = classify_message("how long is dental?")
+
+    assert result.intent == "ask_duration"
+    assert result.should_start_booking is False
+
+
+def test_physiotherapy_duration_question_is_duration_intent():
+    result = classify_message("duration of physiotherapy")
+
+    assert result.intent == "ask_duration"
+    assert result.should_start_booking is False
+
+
+def test_explicit_action_status_collisions_use_action_intents():
+    expected_intents = {
+        "cancel my appointment": "cancel_appointment",
+        "can I move my appointment?": "reschedule_appointment",
+        "I need to reschedule my appointment": "reschedule_appointment",
+        "I don't want my appointment anymore": "cancel_appointment",
+        "I can't come for my appointment": "cancel_appointment",
+    }
+
+    for message, expected_intent in expected_intents.items():
+        result = classify_message(message)
+
+        assert result.intent == expected_intent
+        assert result.intent != "view_appointments"
+        assert result.should_start_booking is False
+
+
+def test_explicit_status_and_overlap_examples_keep_expected_intents():
+    expected_intents = {
+        "what time is my appointment?": "view_appointments",
+        "show my appointments": "view_appointments",
+        "is dental available tomorrow?": "check_availability",
+        "what services are available?": "ask_service_list",
+        "what time are you open?": "ask_opening_hours",
+        "how long is dental?": "ask_duration",
+        "I need a dentist tomorrow": "book_appointment",
+    }
+
+    for message, expected_intent in expected_intents.items():
+        result = classify_message(message)
+
+        assert result.intent == expected_intent

@@ -583,3 +583,71 @@ def test_dont_want_appointment_starts_cancel_flow():
     assert state["intent"] == "cancel_appointment"
     assert "help cancel an appointment" in result["next_question"]
     assert "phone number or appointment reference" in result["next_question"]
+def test_natural_availability_question_starts_availability_flow():
+    from app.ai.agent import determine_next_question, detect_intent
+
+    state = {
+        "messages": [
+            HumanMessage(content="is dental available tomorrow?")
+        ],
+        "available_services": [
+            {
+                "id": 1,
+                "name": "Dental care",
+                "description": "Dental checkups",
+                "duration_minutes": 30,
+                "price": 3500,
+            }
+        ],
+    }
+
+    intent_result = detect_intent(state)
+    state.update(intent_result)
+
+    result = determine_next_question(state)
+
+    assert state["intent"] == "check_availability"
+    assert "Which service would you like to check" in result["next_question"]
+
+
+def test_appointment_status_question_starts_view_flow():
+    from app.ai.agent import determine_next_question, detect_intent
+
+    state = {
+        "messages": [
+            HumanMessage(content="what time is my appointment?")
+        ],
+    }
+
+    intent_result = detect_intent(state)
+    state.update(intent_result)
+
+    result = determine_next_question(state)
+
+    assert state["intent"] == "view_appointments"
+    assert "Please share your phone number" in result["next_question"]
+
+
+def test_duration_question_uses_service_data():
+    from app.ai.agent import determine_next_question
+
+    state = {
+        "messages": [
+            HumanMessage(content="how long is dental?")
+        ],
+        "intent": "general_question",
+        "available_services": [
+            {
+                "id": 1,
+                "name": "Dental care",
+                "description": "Dental checkups",
+                "duration_minutes": 30,
+                "price": 3500,
+            }
+        ],
+    }
+
+    result = determine_next_question(state)
+
+    assert result["intent"] == "general_question"
+    assert result["next_question"] == "Dental care takes 30 minutes."

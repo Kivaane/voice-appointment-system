@@ -348,6 +348,12 @@ def is_natural_reschedule_request(text: str) -> bool:
 
 def is_natural_cancellation_request(text: str) -> bool:
     cancellation_phrases = [
+        "cancel my appointment",
+        "cancel appointment",
+        "cancel my booking",
+        "cancel booking",
+        "i want to cancel",
+        "i need to cancel",
         "i don't want my appointment",
         "i dont want my appointment",
         "i do not want my appointment",
@@ -369,6 +375,108 @@ def is_natural_cancellation_request(text: str) -> bool:
     ]
 
     return any(phrase in text for phrase in cancellation_phrases)
+
+def is_natural_availability_request(text: str) -> bool:
+    availability_words = [
+        "available",
+        "availability",
+        "slot",
+        "slots",
+        "free slot",
+        "free slots",
+        "free time",
+        "any time",
+        "any slots",
+        "when can i come",
+    ]
+
+    date_or_time_words = [
+        "today",
+        "tomorrow",
+        "day after tomorrow",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "morning",
+        "afternoon",
+        "evening",
+        "next",
+    ]
+
+    service_words = [
+        "dental",
+        "dentist",
+        "tooth",
+        "teeth",
+        "physio",
+        "physiotherapy",
+        "dermatology",
+        "skin",
+        "general consultation",
+        "consultation",
+    ]
+
+    if "available services" in text or "services available" in text:
+        return False
+
+    return any(word in text for word in availability_words) and (
+        any(word in text for word in date_or_time_words)
+        or any(word in text for word in service_words)
+    )
+
+
+def is_appointment_status_question(text: str) -> bool:
+    status_phrases = [
+        "do i have any appointments",
+        "do i have appointment",
+        "my appointments",
+        "my bookings",
+        "appointment status",
+        "booking status",
+        "show my appointment",
+        "show my appointments",
+        "view my appointment",
+        "view my appointments",
+        "what time is my appointment",
+        "when is my appointment",
+    ]
+
+    return any(phrase in text for phrase in status_phrases)
+
+
+def is_duration_question(text: str) -> bool:
+    duration_words = [
+        "how long",
+        "duration",
+        "how many minutes",
+        "how much time",
+        "time does it take",
+    ]
+
+    service_words = [
+        "dental",
+        "dentist",
+        "tooth",
+        "teeth",
+        "physio",
+        "physiotherapy",
+        "dermatology",
+        "skin",
+        "general consultation",
+        "consultation",
+        "service",
+        "appointment",
+    ]
+
+    return any(word in text for word in duration_words) and any(
+        word in text for word in service_words
+    )
+
+
 
 
 
@@ -431,8 +539,6 @@ def classify_message(message: str) -> NLUResult:
             confidence=0.92,
             should_start_booking=False,
         )
-
-
     if is_natural_cancellation_request(text):
         return NLUResult(
             intent="cancel_appointment",
@@ -444,6 +550,27 @@ def classify_message(message: str) -> NLUResult:
         return NLUResult(
             intent="reschedule_appointment",
             confidence=0.88,
+            should_start_booking=False,
+        )
+
+    if is_duration_question(text):
+        return NLUResult(
+            intent="ask_duration",
+            confidence=0.9,
+            should_start_booking=False,
+        )
+
+    if is_natural_availability_request(text):
+        return NLUResult(
+            intent="check_availability",
+            confidence=0.88,
+            should_start_booking=False,
+        )
+
+    if is_appointment_status_question(text):
+        return NLUResult(
+            intent="view_appointments",
+            confidence=0.9,
             should_start_booking=False,
         )
 

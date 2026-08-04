@@ -1899,6 +1899,23 @@ def detect_intent(
         return {
             "intent": nlu_result.intent,
         }
+    if (
+        not active_transaction_intent
+        and nlu_result.intent in {
+            "check_availability",
+            "view_appointments",
+        }
+    ):
+        return {
+            "intent": nlu_result.intent,
+            "next_question": None,
+        }
+
+    if nlu_result.intent == "ask_duration":
+        return {
+            "intent": "general_question",
+            "next_question": None,
+        }
 
     if is_human_handoff_message(user_message):
         return {
@@ -3208,6 +3225,79 @@ def determine_next_question(
             "next_question": (
                 f"{matched_service['name']} costs {price_text} and "
                 f"takes {matched_service.get('duration_minutes')} minutes."
+            ),
+        }
+    if nlu_result.intent == "ask_duration":
+        services = state.get("available_services") or get_active_services()
+
+        matched_service = find_service_from_message(
+            user_message=user_message,
+            services=services,
+            allow_numeric_choice=False,
+        )
+
+        if matched_service is None:
+            lower_message = user_message.lower()
+
+            if any(
+                word in lower_message
+                for word in ["tooth", "teeth", "dentist", "dental"]
+            ):
+                matched_service = next(
+                    (
+                        service
+                        for service in services
+                        if "dental" in str(
+                            service.get("name", "")
+                        ).lower()
+                    ),
+                    None,
+                )
+
+            elif any(
+                word in lower_message
+                for word in ["skin", "dermatology"]
+            ):
+                matched_service = next(
+                    (
+                        service
+                        for service in services
+                        if "dermatology" in str(
+                            service.get("name", "")
+                        ).lower()
+                    ),
+                    None,
+                )
+
+            elif any(
+                word in lower_message
+                for word in ["physio", "physiotherapy"]
+            ):
+                matched_service = next(
+                    (
+                        service
+                        for service in services
+                        if "physio" in str(
+                            service.get("name", "")
+                        ).lower()
+                    ),
+                    None,
+                )
+
+        if matched_service is None:
+            return {
+                "intent": "general_question",
+                "next_question": (
+                    "Which service duration would you like to know?\n\n"
+                    + format_service_options(services)
+                ),
+            }
+
+        return {
+            "intent": "general_question",
+            "next_question": (
+                f"{matched_service['name']} takes "
+                f"{matched_service.get('duration_minutes')} minutes."
             ),
         }
 
