@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -423,6 +424,22 @@ class AIConversation(Base):
         nullable=True,
     )
 
+    state_data: Mapped[dict | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    checkpoint_version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        nullable=False,
+    )
+
+    state_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -446,6 +463,11 @@ class AIConversation(Base):
     )
 
     events: Mapped[list["AIEvent"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+    )
+
+    request_executions: Mapped[list["AIRequestExecution"]] = relationship(
         back_populates="conversation",
         cascade="all, delete-orphan",
     )
@@ -544,4 +566,51 @@ class AIEvent(Base):
 
     conversation: Mapped["AIConversation"] = relationship(
         back_populates="events",
+    )
+
+
+class AIRequestExecution(Base):
+    """Idempotency record for one API request within one thread."""
+
+    __tablename__ = "ai_request_executions"
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id",
+            "request_id",
+            name="uq_ai_request_execution_thread_request",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    request_id: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="executing",
+        index=True,
+    )
+    response_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    conversation: Mapped["AIConversation"] = relationship(
+        back_populates="request_executions",
     )

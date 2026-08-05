@@ -1,4 +1,3 @@
-from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -15,6 +14,7 @@ from app.models import (
     Staff,
 )
 from app.schemas import AppointmentCreate
+from app.time_utils import utc_now
 
 
 class AppointmentNotFoundError(Exception):
@@ -102,7 +102,11 @@ def _get_available_slot(
     database: Session,
     slot_id: int,
 ) -> AvailabilitySlot:
-    slot = database.get(AvailabilitySlot, slot_id)
+    slot = database.scalar(
+        select(AvailabilitySlot)
+        .where(AvailabilitySlot.id == slot_id)
+        .with_for_update()
+    )
 
     if slot is None:
         raise InvalidAppointmentError(
@@ -115,6 +119,26 @@ def _get_available_slot(
         )
 
     return slot
+
+
+def _get_appointment_for_update(
+    database: Session,
+    appointment_id: int,
+) -> Appointment:
+    """Lock a mutable appointment row where the database supports it."""
+
+    appointment = database.scalar(
+        select(Appointment)
+        .where(Appointment.id == appointment_id)
+        .with_for_update()
+    )
+
+    if appointment is None:
+        raise AppointmentNotFoundError(
+            f"Appointment {appointment_id} was not found."
+        )
+
+    return appointment
 
 
 def get_appointment_by_id(
@@ -266,7 +290,7 @@ def cancel_appointment(
 ) -> Appointment:
     """Cancel an appointment and release its slot."""
 
-    appointment = get_appointment_by_id(
+    appointment = _get_appointment_for_update(
         database,
         appointment_id,
     )
@@ -286,9 +310,13 @@ def cancel_appointment(
 
     appointment.status = AppointmentStatus.CANCELLED_BY_CUSTOMER
     appointment.cancellation_reason = cancellation_reason
-    appointment.updated_at = datetime.now()
+    appointment.updated_at = utc_now()
 
-    database.commit()
+    try:
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
     database.refresh(appointment)
 
     return appointment
@@ -301,7 +329,7 @@ def reschedule_appointment(
 ) -> Appointment:
     """Move a confirmed appointment to another available slot."""
 
-    appointment = get_appointment_by_id(
+    appointment = _get_appointment_for_update(
         database,
         appointment_id,
     )
@@ -355,7 +383,7 @@ def reschedule_appointment(
     appointment.slot_id = new_slot.id
     appointment.start_datetime = new_slot.start_datetime
     appointment.end_datetime = new_slot.end_datetime
-    appointment.updated_at = datetime.now()
+    appointment.updated_at = utc_now()
 
     try:
         database.commit()

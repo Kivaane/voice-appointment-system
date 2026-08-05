@@ -39,6 +39,14 @@
             padding: 20px 24px;
             background: #202938;
             color: white;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .header-copy {
+            min-width: 0;
         }
 
         .chat-header h1 {
@@ -50,6 +58,21 @@
             margin: 7px 0 0;
             font-size: 14px;
             opacity: 0.8;
+        }
+
+        .new-chat-button {
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            border-radius: 10px;
+            padding: 9px 12px;
+            background: transparent;
+            color: white;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .new-chat-button:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
         }
 
         .messages {
@@ -141,14 +164,49 @@
             opacity: 0.6;
             cursor: not-allowed;
         }
+
+        @media (max-width: 520px) {
+            body {
+                align-items: stretch;
+            }
+
+            .chat-container {
+                width: 100%;
+                height: 100vh;
+                border-radius: 0;
+            }
+
+            .chat-header,
+            .messages {
+                padding-left: 16px;
+                padding-right: 16px;
+            }
+
+            .message {
+                max-width: 88%;
+            }
+
+            .send-button {
+                padding: 0 16px;
+            }
+        }
     </style>
 </head>
 
 <body>
     <main class="chat-container">
         <header class="chat-header">
-            <h1>AI Appointment Assistant</h1>
-            <p>Ask about services, availability, or appointments.</p>
+            <div class="header-copy">
+                <h1>AI Appointment Assistant</h1>
+                <p>Ask about services, availability, or appointments.</p>
+            </div>
+            <button
+                id="new-chat-button"
+                class="new-chat-button"
+                type="button"
+            >
+                New chat
+            </button>
         </header>
 
         <section
@@ -190,7 +248,11 @@
         const sendButton =
             document.getElementById("send-button");
 
-        const threadId = getOrCreateThreadId();
+        const newChatButton =
+            document.getElementById("new-chat-button");
+
+        let threadId = getOrCreateThreadId();
+        let isSending = false;
 
         function getOrCreateThreadId() {
             const storedThreadId =
@@ -242,11 +304,22 @@
         }
 
         function setLoading(isLoading) {
+            isSending = isLoading;
             inputElement.disabled = isLoading;
             sendButton.disabled = isLoading;
+            newChatButton.disabled = isLoading;
+            sendButton.textContent = isLoading
+                ? "Sending..."
+                : "Send";
         }
 
         async function sendMessage(userMessage) {
+            if (isSending) {
+                return;
+            }
+
+            const requestId = crypto.randomUUID();
+
             addMessage(
                 userMessage,
                 "user"
@@ -271,7 +344,8 @@
                         },
                         body: JSON.stringify({
                             message: userMessage,
-                            thread_id: threadId
+                            thread_id: threadId,
+                            request_id: requestId
                         })
                     }
                 );
@@ -289,16 +363,16 @@
                 }
 
                 addMessage(
-                    responseBody.response,
+                    responseBody.message
+                        ?? responseBody.response,
                     "assistant"
                 );
             } catch (error) {
                 typingRow.remove();
 
                 addMessage(
-                    error instanceof Error
-                        ? error.message
-                        : "Something went wrong.",
+                    "I couldn't reach the appointment assistant. "
+                    + "Please check your connection and try again.",
                     "assistant",
                     "error"
                 );
@@ -323,6 +397,28 @@
                 inputElement.value = "";
 
                 await sendMessage(userMessage);
+            }
+        );
+
+        newChatButton.addEventListener(
+            "click",
+            () => {
+                if (isSending) {
+                    return;
+                }
+
+                threadId = crypto.randomUUID();
+                localStorage.setItem(
+                    "appointment_chat_thread_id",
+                    threadId
+                );
+                messagesElement.replaceChildren();
+                addMessage(
+                    "Hello! How can I help you with your appointment?",
+                    "assistant"
+                );
+                inputElement.value = "";
+                inputElement.focus();
             }
         );
 

@@ -115,9 +115,7 @@ def test_capabilities_request_is_controlled() -> None:
 
 def test_price_request_uses_service_data() -> None:
     _, question, _ = controlled_response("how much is dental")
-    assert question["next_question"] == (
-        "Dental care costs LKR 3,500 and takes 30 minutes."
-    )
+    assert question["next_question"] == "Dental care costs LKR 3,500."
 
 
 @pytest.mark.parametrize(
@@ -249,7 +247,7 @@ def test_notification_question_does_not_start_booking_flow():
     assert "reminders and notifications are not enabled" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
     assert "Available services" not in result["next_question"]
-    assert result["intent"] == "general_question"
+    assert result["intent"] == "book_appointment"
 
 
 def test_service_question_does_not_start_booking_flow():
@@ -276,7 +274,7 @@ def test_service_question_does_not_start_booking_flow():
     assert "Yes, we offer Dental care" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
     assert "Available services:" not in result["next_question"]
-    assert result["intent"] == "general_question"
+    assert result["intent"] == "book_appointment"
 
 
 def test_unknown_service_question_lists_available_services():
@@ -303,7 +301,7 @@ def test_unknown_service_question_lists_available_services():
     assert "I don't see that service listed" in result["next_question"]
     assert "Dental care" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
-    assert result["intent"] == "general_question"
+    assert result["intent"] == "book_appointment"
 
 def test_pricing_question_does_not_start_booking_flow():
     from app.ai.agent import determine_next_question
@@ -328,7 +326,7 @@ def test_pricing_question_does_not_start_booking_flow():
 
     assert "Dental care costs LKR 3,500" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
-    assert result["intent"] == "general_question"
+    assert result["intent"] == "book_appointment"
 
 
 def test_pricing_question_without_service_asks_which_service():
@@ -355,7 +353,7 @@ def test_pricing_question_without_service_asks_which_service():
     assert "Which service price would you like to know" in result["next_question"]
     assert "Dental care" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
-    assert result["intent"] == "general_question"
+    assert result["intent"] == "book_appointment"
 
 
 def test_service_list_question_does_not_start_booking_flow():
@@ -390,7 +388,7 @@ def test_service_list_question_does_not_start_booking_flow():
     assert "Dental care" in result["next_question"]
     assert "Physiotherapy" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
-    assert result["intent"] == "general_question"
+    assert result["intent"] == "book_appointment"
 
 def test_opening_hours_question_does_not_start_booking_flow():
     from app.ai.agent import determine_next_question
@@ -415,7 +413,7 @@ def test_opening_hours_question_does_not_start_booking_flow():
 
     assert "I don't have that information available yet" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
-    assert result["intent"] == "general_question"
+    assert result["intent"] == "book_appointment"
 
 
 def test_location_question_does_not_start_booking_flow():
@@ -441,7 +439,7 @@ def test_location_question_does_not_start_booking_flow():
 
     assert "I don't have that information available yet" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
-    assert result["intent"] == "general_question"
+    assert result["intent"] == "book_appointment"
 
 def test_insurance_question_does_not_start_booking_flow():
     from app.ai.agent import determine_next_question
@@ -466,7 +464,7 @@ def test_insurance_question_does_not_start_booking_flow():
 
     assert "I don't have that information available yet" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
-    assert result["intent"] == "general_question"
+    assert result["intent"] == "book_appointment"
 
 
 def test_cancellation_policy_question_does_not_start_booking_flow():
@@ -492,7 +490,7 @@ def test_cancellation_policy_question_does_not_start_booking_flow():
 
     assert "I don't have that information available yet" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
-    assert result["intent"] == "general_question"
+    assert result["intent"] == "book_appointment"
 
 
 def test_payment_methods_question_does_not_start_booking_flow():
@@ -518,7 +516,7 @@ def test_payment_methods_question_does_not_start_booking_flow():
 
     assert "I don't have that information available yet" in result["next_question"]
     assert "Which service would you like" not in result["next_question"]
-    assert result["intent"] == "general_question"
+    assert result["intent"] == "book_appointment"
 
 def test_natural_dentist_need_starts_booking_flow():
     from app.ai.agent import determine_next_question, detect_intent

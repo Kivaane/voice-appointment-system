@@ -60,9 +60,11 @@ def test_multiple_slots_this_one_asks_clarification() -> None:
         }
     )["next_question"]
 
-    assert response == (
+    assert response.startswith(
         "Which slot do you mean? Please choose option 1, 2, or a time."
     )
+    assert "1. 10:00 AM" in response
+    assert "2. 2:30 PM" in response
 
 
 def test_option_two_selects_second_displayed_slot() -> None:
@@ -85,10 +87,12 @@ def test_invalid_slot_option_returns_controlled_response() -> None:
         }
     )["next_question"]
 
-    assert response == (
+    assert response.startswith(
         "I only have options 1 and 2 available. Would you like one "
         "of those, or a different date?"
     )
+    assert "1. 10:00 AM" in response
+    assert "2. 2:30 PM" in response
 
 
 def test_phone_number_is_not_parsed_as_slot_choice() -> None:

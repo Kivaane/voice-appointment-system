@@ -1,7 +1,14 @@
+import sys
 from datetime import datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
+
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.database import SessionLocal
+from app.time_utils import business_today
 from app.models import (
     Appointment,
     AppointmentStatus,
@@ -287,7 +294,7 @@ def main() -> None:
             email="demo.customer@example.com",
         )
 
-        today = datetime.now().date()
+        today = business_today()
         tomorrow = today + timedelta(days=1)
         day_after_tomorrow = today + timedelta(days=2)
         third_day = today + timedelta(days=3)

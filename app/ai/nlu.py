@@ -1,5 +1,8 @@
+import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field
 
 
 @dataclass
@@ -13,10 +16,80 @@ class NLUResult:
     phone_hint: Optional[str] = None
     appointment_reference: Optional[str] = None
     should_start_booking: bool = False
+    staff_hint: Optional[str] = None
+    requires_clarification: bool = False
+    clarification_reason: Optional[str] = None
+
+
+class NLUModelResult(BaseModel):
+    """Validated, classification-only output from the semantic fallback."""
+
+    intent: Literal[
+        "book_appointment",
+        "cancel_appointment",
+        "reschedule_appointment",
+        "check_availability",
+        "view_appointments",
+        "list_services",
+        "ask_notification_capability",
+        "ask_service_availability",
+        "ask_pricing",
+        "ask_duration",
+        "ask_service_list",
+        "ask_opening_hours",
+        "ask_location",
+        "ask_insurance",
+        "ask_cancellation_policy",
+        "ask_payment_methods",
+        "general_question",
+        "unknown",
+    ]
+    confidence: float = Field(ge=0, le=1)
+    service_hint: str | None = None
+    staff_hint: str | None = None
+    date_hint: str | None = None
+    time_hint: str | None = None
+    customer_name: str | None = None
+    phone_hint: str | None = None
+    appointment_reference: str | None = None
+    requires_clarification: bool = False
+    clarification_reason: str | None = None
+
+
+DOMAIN_TYPO_CORRECTIONS = {
+    "phydyotherapy": "physiotherapy",
+    "physiotheraphy": "physiotherapy",
+    "appoinment": "appointment",
+    "appointemnt": "appointment",
+    "appoinmtent": "appointment",
+    "appointmentt": "appointment",
+    "tomorrorw": "tomorrow",
+    "tommorow": "tomorrow",
+    "avalable": "available",
+    "availab": "available",
+    "surger": "surgery",
+    "ypur": "your",
+    "reshedule": "reschedule",
+}
+
+
+def normalize_domain_typos(message: str) -> str:
+    """Correct only known appointment-domain typos, preserving other text."""
+
+    corrected = message
+    for typo, replacement in DOMAIN_TYPO_CORRECTIONS.items():
+        corrected = re.sub(
+            rf"\b{re.escape(typo)}\b",
+            replacement,
+            corrected,
+            flags=re.IGNORECASE,
+        )
+    return corrected
 
 
 def normalize_message(message: str) -> str:
-    return " ".join(message.lower().strip().split())
+    corrected = normalize_domain_typos(message)
+    return " ".join(corrected.lower().strip().split())
 
 
 def is_notification_question(text: str) -> bool:
@@ -229,6 +302,8 @@ def is_payment_methods_question(text: str) -> bool:
     return any(phrase in text for phrase in payment_phrases)
 def is_natural_booking_request(text: str) -> bool:
     booking_need_phrases = [
+        "book",
+        "schedule",
         "i need",
         "need",
         "i want",
@@ -300,9 +375,26 @@ def is_natural_booking_request(text: str) -> bool:
     if any(phrase in text for phrase in blocked_action_phrases):
         return False
 
-    return any(phrase in text for phrase in booking_need_phrases) and any(
-        word in text for word in service_words
+    has_service = any(word in text for word in service_words)
+    has_booking_phrase = any(
+        phrase in text for phrase in booking_need_phrases
     )
+    has_direct_date = any(
+        word in text
+        for word in (
+            "today",
+            "tomorrow",
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+        )
+    )
+
+    return has_service and (has_booking_phrase or has_direct_date)
 
 
 def is_natural_reschedule_request(text: str) -> bool:
@@ -422,6 +514,12 @@ def is_natural_availability_request(text: str) -> bool:
 
     if "available services" in text or "services available" in text:
         return False
+
+    if (
+        any(word in text for word in ("slot", "slots", "time", "times"))
+        and any(word in text for word in ("available", "availability"))
+    ):
+        return True
 
     return any(word in text for word in availability_words) and (
         any(word in text for word in date_or_time_words)

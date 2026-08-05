@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str = "sqlite:///./appointments.db"
     currency: str = "LKR"
+    business_timezone: str = "Asia/Colombo"
+    active_transaction_ttl_minutes: int = 30
+    pending_confirmation_ttl_minutes: int = 10
+    availability_options_ttl_minutes: int = 10
+    idempotency_execution_ttl_minutes: int = 5
 
     log_level: Literal[
         "DEBUG",
