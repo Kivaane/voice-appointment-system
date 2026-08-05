@@ -233,9 +233,31 @@ class AIChatRequest(BaseModel):
         max_length=100,
     )
 
+    request_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+    )
+
+
+class AIChatOption(BaseModel):
+    """A safe selectable option for browser and future voice clients."""
+
+    id: int
+    label: str
+    start_datetime: str | None = None
+    end_datetime: str | None = None
+
 
 class AIChatResponse(BaseModel):
     """Response returned by the appointment agent."""
 
     thread_id: str
     response: str
+    message: str
+    intent: str | None = None
+    conversation_stage: str
+    requires_confirmation: bool = False
+    pending_action: str | None = None
+    options: list[AIChatOption] = Field(default_factory=list)
+    error: str | None = None

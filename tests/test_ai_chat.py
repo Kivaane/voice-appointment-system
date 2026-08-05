@@ -39,10 +39,13 @@ def test_ai_chat_uses_provided_thread_id(
 
     assert response.status_code == 200
 
-    assert response.json() == {
-        "thread_id": "thread-chat-test-001",
-        "response": "How may I help with your appointment?",
-    }
+    response_data = response.json()
+    assert response_data["thread_id"] == "thread-chat-test-001"
+    assert response_data["response"] == (
+        "How may I help with your appointment?"
+    )
+    assert response_data["message"] == response_data["response"]
+    assert response_data["conversation_stage"] == "idle"
 
     assert captured_arguments["user_message"] == (
         "I need an appointment."

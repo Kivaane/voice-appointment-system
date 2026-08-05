@@ -2,7 +2,10 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.ai.agent import run_appointment_agent
+from app.ai.agent import (
+    get_structured_conversation_state,
+    run_appointment_agent,
+)
 from app.schemas import AIChatRequest, AIChatResponse
 
 
@@ -23,7 +26,7 @@ def chat_with_appointment_agent(
     """Send one message to the stateful appointment agent."""
 
     thread_id = chat_request.thread_id or str(uuid4())
-    request_id = str(uuid4())
+    request_id = chat_request.request_id or str(uuid4())
 
     try:
         assistant_response = run_appointment_agent(
@@ -37,7 +40,11 @@ def chat_with_appointment_agent(
             detail="The appointment agent could not process the request.",
         ) from error
 
+    structured_state = get_structured_conversation_state(thread_id)
+
     return AIChatResponse(
         thread_id=thread_id,
         response=assistant_response,
+        message=assistant_response,
+        **structured_state,
     )
