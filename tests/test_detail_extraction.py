@@ -1,6 +1,6 @@
 import pytest
 from langchain_core.messages import HumanMessage
-
+from datetime import date
 from app.ai.agent import extract_details
 
 
@@ -87,7 +87,14 @@ def test_returns_empty_update_when_no_details_exist() -> None:
     assert result == {}
 
 
-def test_parse_requested_date_understands_ordinal_day() -> None:
+def test_parse_requested_date_understands_ordinal_day(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.ai.agent.business_today",
+        lambda: date(2026, 8, 1),
+    )
+
     result = extract_details(
         {
             "messages": [
@@ -100,7 +107,6 @@ def test_parse_requested_date_understands_ordinal_day() -> None:
     assert result == {
         "requested_date": "2026-08-05",
     }
-
 
 def test_parse_requested_date_does_not_treat_ids_as_dates() -> None:
     customer_result = extract_details(

@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage
-
+from datetime import date
 from app.ai.agent import appointment_agent, extract_text_content
 
 
@@ -773,8 +773,13 @@ def test_booking_conversation_allows_time_change_after_rejection() -> None:
 
     mocked_create_appointment.assert_not_called()
 
-def test_booking_conversation_allows_date_change_after_rejection() -> None:
+def test_booking_conversation_allows_date_change_after_rejection(monkeypatch,) -> None:
     thread_id = "booking-conversation-change-date-after-reject-test-001"
+
+    monkeypatch.setattr(
+        "app.ai.agent.business_today",
+        lambda: date(2026, 8, 1),
+    )
 
     config = {
         "configurable": {
