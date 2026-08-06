@@ -60,19 +60,62 @@
             opacity: 0.8;
         }
 
-        .new-chat-button {
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .header-button {
             border: 1px solid rgba(255, 255, 255, 0.5);
             border-radius: 10px;
-            padding: 9px 12px;
+            padding: 8px 12px;
             background: transparent;
             color: white;
+            font-size: 13px;
             cursor: pointer;
             white-space: nowrap;
         }
 
-        .new-chat-button:disabled {
+        .header-button:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .header-button:disabled {
             opacity: 0.55;
             cursor: not-allowed;
+        }
+
+        .header-button.stop-speaking {
+            background: #dc2626;
+            border-color: #dc2626;
+        }
+
+        .header-button.stop-speaking:hover {
+            background: #b91c1c;
+        }
+
+        .voice-banner {
+            padding: 10px 16px;
+            font-size: 13px;
+            line-height: 1.4;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .voice-banner.unsupported {
+            background: #fffbe6;
+            border-bottom: 1px solid #ffe58f;
+            color: #873800;
+        }
+
+        .voice-banner.permission-denied {
+            background: #fff2f0;
+            border-bottom: 1px solid #ffccc7;
+            color: #a8071a;
         }
 
         .messages {
@@ -133,6 +176,7 @@
             display: flex;
             gap: 10px;
             background: white;
+            align-items: center;
         }
 
         .chat-input {
@@ -148,10 +192,43 @@
             border-color: #202938;
         }
 
+        .mic-button {
+            border: 1px solid #cbd2dc;
+            border-radius: 12px;
+            padding: 13px 14px;
+            background: #f8fafc;
+            color: #334155;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .mic-button:hover:not(:disabled) {
+            background: #f1f5f9;
+            border-color: #94a3b8;
+        }
+
+        .mic-button.listening {
+            background: #ef4444;
+            color: white;
+            border-color: #dc2626;
+            animation: pulse-listening 1.5s infinite;
+        }
+
+        @keyframes pulse-listening {
+            0% { opacity: 1; }
+            50% { opacity: 0.75; }
+            100% { opacity: 1; }
+        }
+
         .send-button {
             border: none;
             border-radius: 12px;
-            padding: 0 22px;
+            padding: 13px 22px;
             background: #202938;
             color: white;
             font-size: 15px;
@@ -160,6 +237,7 @@
         }
 
         .send-button:disabled,
+        .mic-button:disabled,
         .chat-input:disabled {
             opacity: 0.6;
             cursor: not-allowed;
@@ -186,8 +264,10 @@
                 max-width: 88%;
             }
 
-            .send-button {
-                padding: 0 16px;
+            .send-button,
+            .mic-button {
+                padding: 11px 12px;
+                font-size: 13px;
             }
         }
     </style>
@@ -200,14 +280,40 @@
                 <h1>AI Appointment Assistant</h1>
                 <p>Ask about services, availability, or appointments.</p>
             </div>
-            <button
-                id="new-chat-button"
-                class="new-chat-button"
-                type="button"
-            >
-                New chat
-            </button>
+            <div class="header-actions">
+                <button
+                    id="stop-speaking-button"
+                    class="header-button stop-speaking"
+                    type="button"
+                    style="display: none;"
+                >
+                    Stop Speaking
+                </button>
+
+                <button
+                    id="mute-button"
+                    class="header-button"
+                    type="button"
+                >
+                    Sound On
+                </button>
+
+                <button
+                    id="new-chat-button"
+                    class="header-button"
+                    type="button"
+                >
+                    New chat
+                </button>
+            </div>
         </header>
+
+        <div
+            id="voice-banner"
+            class="voice-banner"
+            style="display: none;"
+            role="alert"
+        ></div>
 
         <section
             id="messages"
@@ -224,6 +330,14 @@
                 autocomplete="off"
                 required
             >
+
+            <button
+                id="mic-button"
+                class="mic-button"
+                type="button"
+            >
+                Start Speaking
+            </button>
 
             <button
                 id="send-button"
@@ -251,8 +365,214 @@
         const newChatButton =
             document.getElementById("new-chat-button");
 
+        const micButton =
+            document.getElementById("mic-button");
+
+        const muteButton =
+            document.getElementById("mute-button");
+
+        const stopSpeakingButton =
+            document.getElementById("stop-speaking-button");
+
+        const voiceBanner =
+            document.getElementById("voice-banner");
+
         let threadId = getOrCreateThreadId();
         let isSending = false;
+        let isListening = false;
+        let isMuted = false;
+        let activeVoiceBannerType = null; // 'unsupported' | 'permission_denied' | null
+        let finalizedTranscript = ""; // accumulates finalized segments within one session
+        let recognitionTimeout = null;  // safety auto-stop timer
+
+        const SpeechRecognitionClass =
+            window.SpeechRecognition || window.webkitSpeechRecognition;
+
+        const isSpeechRecognitionSupported =
+            Boolean(SpeechRecognitionClass);
+
+        let recognition = null;
+
+        if (isSpeechRecognitionSupported) {
+            recognition = new SpeechRecognitionClass();
+            recognition.continuous = false;
+            recognition.interimResults = true;
+            recognition.lang = "en-US";
+
+            recognition.onstart = () => {
+                isListening = true;
+                finalizedTranscript = ""; // reset per session
+                micButton.textContent = "Stop Listening";
+                micButton.classList.add("listening");
+
+                // Safety auto-stop: stop after 12 s of continuous listening.
+                clearTimeout(recognitionTimeout);
+                recognitionTimeout = setTimeout(() => {
+                    if (isListening) {
+                        try { recognition.stop(); } catch (e) {}
+                    }
+                }, 12000);
+
+                if (activeVoiceBannerType === "permission_denied") {
+                    clearVoiceBanner();
+                }
+            };
+
+            recognition.onresult = (event) => {
+                // Accumulate finalized segments; interim results are appended
+                // separately so previously recognised words are never erased.
+                let interimText = "";
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    if (event.results[i].isFinal) {
+                        finalizedTranscript += event.results[i][0].transcript;
+                    } else {
+                        interimText += event.results[i][0].transcript;
+                    }
+                }
+                const displayText = (finalizedTranscript + interimText).trim();
+                if (displayText) {
+                    inputElement.value = displayText;
+                }
+            };
+
+            recognition.onerror = (event) => {
+                isListening = false;
+                clearTimeout(recognitionTimeout);
+                resetMicButtonUI();
+
+                if (
+                    event.error === "not-allowed" ||
+                    event.error === "service-not-allowed"
+                ) {
+                    showVoiceBanner(
+                        "permission_denied",
+                        "Microphone access was denied or unavailable. Please enable microphone permissions in your browser settings to use voice input."
+                    );
+                }
+            };
+
+            recognition.onend = () => {
+                isListening = false;
+                clearTimeout(recognitionTimeout);
+                // Preserve the complete finalized transcript in the input.
+                if (finalizedTranscript.trim()) {
+                    inputElement.value = finalizedTranscript.trim();
+                }
+                resetMicButtonUI();
+            };
+        } else {
+            showVoiceBanner(
+                "unsupported",
+                "Voice input is not supported in this browser. You can continue using text chat."
+            );
+            micButton.disabled = true;
+            micButton.title = "Speech recognition is not supported in this browser.";
+        }
+
+        function showVoiceBanner(type, messageText) {
+            activeVoiceBannerType = type;
+            voiceBanner.className = `voice-banner ${type}`;
+            voiceBanner.textContent = messageText;
+            voiceBanner.style.display = "flex";
+        }
+
+        function clearVoiceBanner() {
+            activeVoiceBannerType = null;
+            voiceBanner.style.display = "none";
+            voiceBanner.textContent = "";
+            voiceBanner.className = "voice-banner";
+        }
+
+        function resetMicButtonUI() {
+            if (!isSpeechRecognitionSupported) {
+                micButton.disabled = true;
+                return;
+            }
+            micButton.textContent = "Start Speaking";
+            micButton.classList.remove("listening");
+            micButton.disabled = isSending;
+        }
+
+        function stopListeningIfActive() {
+            if (isListening && recognition) {
+                try {
+                    recognition.stop();
+                } catch (e) {}
+                isListening = false;
+                resetMicButtonUI();
+            }
+        }
+
+        function stopSpeakingIfActive() {
+            if ("speechSynthesis" in window) {
+                window.speechSynthesis.cancel();
+            }
+            stopSpeakingButton.style.display = "none";
+        }
+
+        function speakReply(text) {
+            if (isMuted || !("speechSynthesis" in window) || !text) {
+                return;
+            }
+
+            stopSpeakingIfActive();
+
+            const cleanText = text
+                .replace(/[*_#`~]/g, "")
+                .trim();
+
+            if (!cleanText) {
+                return;
+            }
+
+            const utterance = new SpeechSynthesisUtterance(cleanText);
+            utterance.lang = "en-US";
+
+            utterance.onstart = () => {
+                stopSpeakingButton.style.display = "inline-block";
+            };
+
+            utterance.onend = () => {
+                stopSpeakingButton.style.display = "none";
+            };
+
+            utterance.onerror = () => {
+                stopSpeakingButton.style.display = "none";
+            };
+
+            window.speechSynthesis.speak(utterance);
+        }
+
+        micButton.addEventListener("click", () => {
+            if (isSending || !isSpeechRecognitionSupported) {
+                return;
+            }
+
+            if (isListening) {
+                stopListeningIfActive();
+            } else {
+                stopSpeakingIfActive();
+                try {
+                    recognition.start();
+                } catch (error) {
+                    console.error("Failed to start speech recognition:", error);
+                }
+            }
+        });
+
+        muteButton.addEventListener("click", () => {
+            isMuted = !isMuted;
+            if (isMuted) {
+                muteButton.textContent = "Muted";
+                stopSpeakingIfActive();
+            } else {
+                muteButton.textContent = "Sound On";
+            }
+        });
+
+        stopSpeakingButton.addEventListener("click", () => {
+            stopSpeakingIfActive();
+        });
 
         function getOrCreateThreadId() {
             const storedThreadId =
@@ -308,6 +628,9 @@
             inputElement.disabled = isLoading;
             sendButton.disabled = isLoading;
             newChatButton.disabled = isLoading;
+            if (isSpeechRecognitionSupported) {
+                micButton.disabled = isLoading;
+            }
             sendButton.textContent = isLoading
                 ? "Sending..."
                 : "Send";
@@ -317,6 +640,9 @@
             if (isSending) {
                 return;
             }
+
+            stopListeningIfActive();
+            stopSpeakingIfActive();
 
             const requestId = crypto.randomUUID();
 
@@ -362,11 +688,16 @@
                     );
                 }
 
-                addMessage(
+                const replyText =
                     responseBody.message
-                        ?? responseBody.response,
+                    ?? responseBody.response;
+
+                addMessage(
+                    replyText,
                     "assistant"
                 );
+
+                speakReply(replyText);
             } catch (error) {
                 typingRow.remove();
 
@@ -406,6 +737,9 @@
                 if (isSending) {
                     return;
                 }
+
+                stopListeningIfActive();
+                stopSpeakingIfActive();
 
                 threadId = crypto.randomUUID();
                 localStorage.setItem(

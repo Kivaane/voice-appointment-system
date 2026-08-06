@@ -12,4 +12,6 @@ def test_browser_chat_contains_milestone_one_request_guards(client) -> None:
     assert "responseBody.message" in html
     assert "Please check your connection and try again" in html
     assert "messagesElement.replaceChildren()" in html
-    assert "microphone" not in html.lower()
+    assert 'id="mic-button"' in html
+    assert 'id="mute-button"' in html
+    assert 'id="stop-speaking-button"' in html
