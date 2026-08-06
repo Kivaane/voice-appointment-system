@@ -26,6 +26,12 @@ from app.ai.matchers import (
     is_ambiguous_confirmation_message,
     is_confirmation_no_message,
     is_confirmation_yes_message,
+    is_name_correction_message,
+    is_phone_correction_message,
+    is_service_correction_message,
+    is_staff_correction_message,
+    is_targeted_service_correction_message,
+    is_time_correction_message,
     normalize_text,
 )
 from app.ai.model import classify_unknown_message, get_chat_model
@@ -1654,41 +1660,6 @@ def format_reschedule_confirmation_summary(
     )
 
 
-def is_time_correction_message(
-    user_message: str,
-) -> bool:
-    """Return True when the user wants to change the selected slot."""
-
-    normalized_message = normalize_text(user_message)
-
-    time_change_phrases = (
-        "change time",
-        "change the time",
-        "chnage time",
-        "chnage the time",
-        "different time",
-        "differnt time",
-        "another time",
-        "another slot",
-        "different slot",
-        "differnt slot",
-        "change slot",
-        "change the slot",
-        "choose different time",
-        "choose differnt time",
-        "change appointment time",
-        "change my time",
-        "afternoon instead",
-        "morning instead",
-        "evening instead",
-    )
-
-    return any(
-        phrase in normalized_message
-        for phrase in time_change_phrases
-    )
-
-
 def is_date_correction_message(
     user_message: str,
 ) -> bool:
@@ -1716,115 +1687,6 @@ def is_date_correction_message(
     return (
         any(phrase in normalized_message for phrase in ("i meant", "no i meant"))
         and parse_requested_date(user_message) is not None
-    )
-
-
-def is_service_correction_message(
-    user_message: str,
-) -> bool:
-    """Return True when the user wants to change the service."""
-
-    normalized_message = normalize_text(user_message)
-
-    service_change_phrases = (
-        "change service",
-        "change the service",
-        "different service",
-        "differnt service",
-        "another service",
-        "choose different service",
-        "choose differnt service",
-        "change appointment service",
-    )
-
-    if any(
-        phrase in normalized_message
-        for phrase in service_change_phrases
-    ):
-        return True
-
-    service_words = (
-        "dental",
-        "dentist",
-        "physiotherapy",
-        "physio",
-        "dermatology",
-        "skin",
-        "general consultation",
-    )
-    return (
-        any(marker in normalized_message for marker in ("not ", "i meant", "instead"))
-        and any(word in normalized_message for word in service_words)
-    )
-
-
-def is_targeted_service_correction_message(user_message: str) -> bool:
-    """Return True when a correction states the replacement service."""
-
-    normalized_message = normalize_text(user_message)
-    service_words = (
-        "dental",
-        "dentist",
-        "physiotherapy",
-        "physio",
-        "dermatology",
-        "skin",
-        "general consultation",
-    )
-    return (
-        is_service_correction_message(user_message)
-        and any(word in normalized_message for word in service_words)
-    )
-
-
-def is_staff_correction_message(user_message: str) -> bool:
-    """Return True when the selected staff member should be changed."""
-
-    normalized_message = normalize_text(user_message)
-    return any(
-        phrase in normalized_message
-        for phrase in (
-            "change doctor",
-            "change the doctor",
-            "change only the doctor",
-            "different doctor",
-            "another doctor",
-            "different staff",
-            "another staff",
-            "with dr ",
-            "with doctor ",
-        )
-    )
-
-
-def is_phone_correction_message(user_message: str) -> bool:
-    """Return True when a supplied phone number replaces the prior number."""
-
-    normalized_message = normalize_text(user_message)
-    return any(
-        phrase in normalized_message
-        for phrase in (
-            "other number",
-            "new number",
-            "correct number",
-            "number is actually",
-            "use this number",
-        )
-    )
-
-
-def is_name_correction_message(user_message: str) -> bool:
-    """Return True when the customer explicitly corrects their name."""
-
-    normalized_message = normalize_text(user_message)
-    return any(
-        phrase in normalized_message
-        for phrase in (
-            "sorry my name is",
-            "correct name is",
-            "name is actually",
-            "i meant my name",
-        )
     )
 
 
